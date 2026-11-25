@@ -5,24 +5,19 @@ import android.content.pm.PackageManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
@@ -37,6 +32,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -45,119 +41,96 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.VoiceCatalog
 import com.example.data.database.VoiceProfileEntity
+import com.example.data.repository.VoiceAnalysisResult
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.VoiceViewModel
 
-data class ScriptOption(val title: String, val text: String)
+private enum class CloneInputMode { LIVE_RECORD, UPLOAD_FILE }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VoicesScreen(
     viewModel: VoiceViewModel,
+    onUseVoiceInStudio: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val voiceProfiles by viewModel.voiceProfiles.collectAsState()
+    val voiceProfiles by viewModel.voiceProfiles.collectAsStateWithLifecycle()
 
-    // Recording states
-    val isRecording by viewModel.isRecording.collectAsState()
-    val recordingDurationSec by viewModel.recordingDurationSec.collectAsState()
-    val recordingAmplitudes by viewModel.recordingAmplitudes.collectAsState()
-    val tempRecordFile by viewModel.tempRecordFile.collectAsState()
+    // Live recording & upload states
+    val isRecording by viewModel.isRecording.collectAsStateWithLifecycle()
+    val recordingDurationSec by viewModel.recordingDurationSec.collectAsStateWithLifecycle()
+    val recordingAmplitudes by viewModel.recordingAmplitudes.collectAsStateWithLifecycle()
+    val tempSampleFile by viewModel.tempSampleFile.collectAsStateWithLifecycle()
+    val tempSampleDisplayName by viewModel.tempSampleDisplayName.collectAsStateWithLifecycle()
+
+    // AI Accent & Voice DNA Analysis states
+    val isAnalyzingVoice by viewModel.isAnalyzingVoice.collectAsStateWithLifecycle()
+    val voiceAnalysis by viewModel.voiceAnalysis.collectAsStateWithLifecycle()
+    val analysisError by viewModel.analysisError.collectAsStateWithLifecycle()
 
     // Audio preview player states
-    val isPlaying by viewModel.isPlaying.collectAsState()
-    val playingPath by viewModel.playingPath.collectAsState()
+    val isPlaying by viewModel.isPlaying.collectAsStateWithLifecycle()
+    val playingPath by viewModel.playingPath.collectAsStateWithLifecycle()
 
-    var showCreateDialog by remember { mutableStateOf(false) }
+    // Filter state
+    var activeFilter by remember { mutableStateOf("All") }
+
+    val filteredVoices by remember(voiceProfiles, activeFilter) {
+        derivedStateOf {
+            when (activeFilter) {
+                "My Clones" -> voiceProfiles.filter { !it.isPrebuilt }
+                "English" -> voiceProfiles.filter { it.language.equals("English", ignoreCase = true) }
+                "Bengali" -> voiceProfiles.filter { it.language.equals("Bengali", ignoreCase = true) }
+                "Hindi" -> voiceProfiles.filter { it.language.equals("Hindi", ignoreCase = true) }
+                "Global" -> voiceProfiles.filter {
+                    it.isPrebuilt && !it.language.equals("English", true) &&
+                        !it.language.equals("Bengali", true) &&
+                        !it.language.equals("Hindi", true)
+                }
+                else -> voiceProfiles
+            }
+        }
+    }
+
+    // Clone Modal state
+    var showCloneDialog by remember { mutableStateOf(false) }
+    var cloneInputMode by remember { mutableStateOf(CloneInputMode.LIVE_RECORD) }
     var newVoiceName by remember { mutableStateOf("") }
     var selectedGender by remember { mutableStateOf("Male") }
-    var selectedRecordingLanguage by remember { mutableStateOf("Bangla 🇧🇩") }
-    var selectedPitchTone by remember { mutableStateOf("Natural Warm") }
-    var selectedAccent by remember { mutableStateOf("খাঁটি দেশীয় অ্যাকসেন্ট (Authentic Native)") }
+    var selectedHintLanguage by remember { mutableStateOf("English") }
+    var customAccentOverride by remember { mutableStateOf("") }
+    var customDescription by remember { mutableStateOf("") }
     var selectedScriptIndex by remember { mutableStateOf(0) }
-    var step by remember { mutableStateOf(1) } // 1: Info, 2: Record & Preview
 
-    val languages = listOf("Bangla 🇧🇩", "English 🇺🇸", "Hindi 🇮🇳", "Arabic 🇸🇦", "Spanish 🇪🇸", "French 🇫🇷")
-    val genders = listOf("Male", "Female", "Other")
-    val pitchTones = listOf("Natural Warm", "Deep Bass", "Bright Crisp", "Soft Clear")
-    val accents = listOf(
-        "খাঁটি দেশীয় অ্যাকসেন্ট (Authentic Native)",
-        "পেশাদার ধারাভাষ্য (Studio Pro)",
-        "মিষ্টি ও সুরভিত (Sweet Melodic)",
-        "নাটকীয় ও গম্ভীর (Dramatic Bold)"
-    )
+    // Keep accent field auto-populated when AI Accent Detection finishes
+    LaunchedEffect(voiceAnalysis) {
+        voiceAnalysis?.let { result ->
+            customAccentOverride = result.detectedAccent
+            selectedGender = result.detectedGender
+        }
+    }
 
-    // Language-specific sample reading scripts
-    val sampleScripts = mapOf(
-        "Bangla 🇧🇩" to listOf(
-            ScriptOption(
-                "স্বাভাবিক কথোপকথন",
-                "হ্যালো! আমি আমার নিজের স্বাভাবিক কণ্ঠে কথা বলছি। এই অডিও রেকর্ডিং দিয়ে আমার নিজস্ব ডিজিটাল ভয়েস ক্লোন তৈরি হচ্ছে, যাতে কৃত্রিম বুদ্ধিমত্তা আমার কন্ঠ ও অ্যাকসেন্ট সঠিকভাবে শিখে নিতে পারে।"
-            ),
-            ScriptOption(
-                "কাব্যিক ও স্পষ্ট পাঠ",
-                "আমি বাংলায় গান গাই, আমি বাংলায় কথা কই। বাংলার মাটি, বাংলার জল, বাংলার প্রকৃতি আমার হৃদয়জুড়ে। প্রতিটি শব্দের উচ্চারণে ফুটে উঠুক আমার কন্ঠের স্নিগ্ধতা।"
-            ),
-            ScriptOption(
-                "পেশাদার ধারাভাষ্য",
-                "বিজ্ঞান ও প্রযুক্তির অভাবনীয় অগ্রগতির ফলে এআই ভয়েস ক্লোনিং আজ মানুষের ভাব প্রকাশকে আরও সহজ ও গতিশীল করে তুলেছে।"
-            )
-        ),
-        "English 🇺🇸" to listOf(
-            ScriptOption(
-                "Natural Conversation",
-                "Hello! I am recording my authentic voice sample so that the artificial intelligence model can capture my personal accent, natural pacing, and vocal tone for speech generation."
-            ),
-            ScriptOption(
-                "Phonetic Pangram",
-                "The quick brown fox jumps gracefully over the lazy dog near the sparkling riverbank on a warm and sunny afternoon."
-            ),
-            ScriptOption(
-                "Studio Narration",
-                "Technology connects people across languages and cultures. Personalized voice cloning brings stories, audiobooks, and content to life with genuine human emotion."
-            )
-        ),
-        "Hindi 🇮🇳" to listOf(
-            ScriptOption(
-                "प्राकृतिक बातचीत",
-                "नमस्ते! मैं अपनी स्वाभाविक आवाज़ में यह वाक्य पढ़ रहा हूँ ताकि एआई मेरे अनोखे लहजे, पिच और बोलने के अंदाज़ को पूरी तरह सीख सके।"
-            ),
-            ScriptOption(
-                "सुंदर विचार",
-                "जीवन में हर नया दिन कुछ नया सीखने और आगे बढ़ने का एक सुनहरा अवसर लेकर आता है। आत्मविश्वास और स्पष्ट आवाज़ ही हमारी पहचान है।"
-            )
-        ),
-        "Arabic 🇸🇦" to listOf(
-            ScriptOption(
-                "محادثة طبيعية",
-                "مرحباً! أقوم بتسجيل نبرة صوتي الطبيعية لتمكين الذكاء الاصطناعي من استنساخ صوتي بلهجتي الأصلية وأسلوبي الخاص بكل دقة ووضوح."
-            )
-        ),
-        "Spanish 🇪🇸" to listOf(
-            ScriptOption(
-                "Conversación Natural",
-                "¡Hola! Estoy grabando mi voz auténtica para que la inteligencia artificial reproduzca mi entonación, tono y acento de manera natural y expresiva."
-            )
-        ),
-        "French 🇫🇷" to listOf(
-            ScriptOption(
-                "Conversation Naturelle",
-                "Bonjour! J'enregistre ma voix naturelle afin que l'intelligence artificielle puisse reproduire fidèlement mon accent, mon rythme et mon timbre chaleureux."
-            )
-        )
-    )
+    // Zero-permission SAF Audio File Picker
+    val audioPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.importUploadedAudio(uri, selectedHintLanguage)
+        }
+    }
 
-    val currentScripts = sampleScripts[selectedRecordingLanguage] ?: sampleScripts["Bangla 🇧🇩"]!!
-
-    val permissionLauncher = rememberLauncherForActivityResult(
+    // Microphone Permission Launcher
+    val micPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            step = 2
+    ) { granted ->
+        if (granted) {
+            viewModel.startRecording()
         } else {
-            Toast.makeText(context, "ভয়েস রেকর্ড করতে মাইক্রোফোনের অনুমতি আবশ্যক!", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "Microphone permission is required for live voice recording.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -181,17 +154,17 @@ fun VoicesScreen(
                     )
                 )
             }
-            .padding(16.dp)
+            .padding(horizontal = 16.dp)
     ) {
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
-        // Title Header with Liquid Glass Button
+        // Header Row
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
@@ -201,15 +174,15 @@ fun VoicesScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "ভয়েস স্টুডিও (Voice Studio)",
+                        text = "Voice Library & Cloning",
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
                         color = CosmicWhite
                     )
                 }
                 Text(
-                    text = "আপনার ক্লোন করা এবং ডিফল্ট ভয়েসসমূহ",
-                    fontSize = 12.sp,
+                    text = "Clone via live mic or file upload with AI accent detection",
+                    fontSize = 11.sp,
                     color = CosmicMutedText,
                     modifier = Modifier.padding(start = 18.dp, top = 2.dp)
                 )
@@ -220,29 +193,62 @@ fun VoicesScreen(
                     .clip(RoundedCornerShape(20.dp))
                     .background(LiquidActiveButtonBrush)
                     .clickable {
+                        viewModel.cancelCloningSession()
                         newVoiceName = ""
                         selectedGender = "Male"
-                        selectedRecordingLanguage = "Bangla 🇧🇩"
-                        selectedPitchTone = "Natural Warm"
-                        selectedAccent = "খাঁটি দেশীয় অ্যাকসেন্ট (Authentic Native)"
+                        selectedHintLanguage = "English"
+                        customAccentOverride = ""
+                        customDescription = ""
                         selectedScriptIndex = 0
-                        step = 1
-                        showCreateDialog = true
+                        cloneInputMode = CloneInputMode.LIVE_RECORD
+                        showCloneDialog = true
                     }
-                    .padding(horizontal = 14.dp, vertical = 8.dp)
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
                     .testTag("add_voice_button")
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Add, contentDescription = "Add", tint = DeepSpaceBackground, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Add, contentDescription = "Clone Voice", tint = DeepSpaceBackground, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("ভয়েস ক্লোন", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = DeepSpaceBackground)
+                    Text("Clone Voice", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = DeepSpaceBackground)
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
-        if (voiceProfiles.isEmpty()) {
+        // Category Filter Chips
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            items(VoiceCatalog.voiceFilterCategories, key = { it }) { category ->
+                val isSelected = activeFilter == category
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(if (isSelected) CosmicCyan else LiquidGlassSurface)
+                        .border(
+                            1.dp,
+                            if (isSelected) CosmicCyan else LiquidGlassBorder,
+                            RoundedCornerShape(16.dp)
+                        )
+                        .clickable { activeFilter = category }
+                        .padding(horizontal = 14.dp, vertical = 7.dp)
+                        .testTag("filter_${category.lowercase().replace(" ", "_")}")
+                ) {
+                    Text(
+                        text = category,
+                        fontSize = 12.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                        color = if (isSelected) DeepSpaceBackground else CosmicWhite
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        if (filteredVoices.isEmpty()) {
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
@@ -251,42 +257,54 @@ fun VoicesScreen(
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
-                        imageVector = Icons.Default.Hearing,
+                        imageVector = Icons.Default.RecordVoiceOver,
                         contentDescription = null,
                         tint = CosmicCyan.copy(alpha = 0.5f),
-                        modifier = Modifier.size(64.dp)
+                        modifier = Modifier.size(56.dp)
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text("কোনো ভয়েস প্রোফাইল পাওয়া যায়নি", color = CosmicMutedText, fontSize = 14.sp)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = if (activeFilter == "My Clones") {
+                            "No cloned voices yet. Tap 'Clone Voice' to record or upload a sample!"
+                        } else {
+                            "No voices available in this category."
+                        },
+                        color = CosmicMutedText,
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 24.dp)
+                    )
                 }
             }
         } else {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(bottom = 20.dp),
                 modifier = Modifier.weight(1f)
             ) {
-                items(voiceProfiles) { profile ->
-                    LiquidGlassVoiceCard(
+                items(filteredVoices, key = { it.id }) { profile ->
+                    CharacterVoiceCard(
                         profile = profile,
-                        onDelete = { viewModel.deleteVoiceProfile(profile.id) },
-                        onPlaySample = {
-                            profile.audioPath?.let { viewModel.playAudio(it) }
-                        },
-                        isPlaying = isPlaying && playingPath == profile.audioPath
+                        isPlayingSample = isPlaying && playingPath != null && playingPath == profile.audioPath,
+                        onUseClick = { onUseVoiceInStudio(profile.id) },
+                        onPlaySample = { profile.audioPath?.let { viewModel.playAudio(it) } },
+                        onDelete = { viewModel.deleteVoiceProfile(profile.id) }
                     )
                 }
             }
         }
     }
 
-    // --- Record Voice & Setup Dialog (Liquid Glass Modal) ---
-    if (showCreateDialog) {
+    // --- Voice Clone Studio Modal (Live Record + Audio File Upload + AI Accent Detection) ---
+    if (showCloneDialog) {
+        val scripts = VoiceCatalog.cloneReadingScripts[selectedHintLanguage]
+            ?: VoiceCatalog.cloneReadingScripts["English"]!!
+        val activeScript = scripts.getOrNull(selectedScriptIndex) ?: scripts.first()
+
         AlertDialog(
             onDismissRequest = {
-                viewModel.cancelRecording()
-                showCreateDialog = false
+                viewModel.cancelCloningSession()
+                showCloneDialog = false
             },
             properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
             modifier = Modifier
@@ -302,18 +320,24 @@ fun VoicesScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        text = if (step == 1) "✨ ভয়েস ক্লোনিং সেটআপ" else "🎙️ ভয়েস স্যাম্পেল রেকর্ড",
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = CosmicWhite
-                    )
+                    Column {
+                        Text(
+                            text = "AI Voice Clone Studio",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = CosmicWhite
+                        )
+                        Text(
+                            text = "Live Recording or Audio Upload + Accent AI",
+                            fontSize = 11.sp,
+                            color = CosmicCyan
+                        )
+                    }
                     IconButton(
                         onClick = {
-                            viewModel.cancelRecording()
-                            showCreateDialog = false
-                        },
-                        modifier = Modifier.size(28.dp)
+                            viewModel.cancelCloningSession()
+                            showCloneDialog = false
+                        }
                     ) {
                         Icon(Icons.Default.Close, contentDescription = "Close", tint = CosmicMutedText)
                     }
@@ -323,15 +347,406 @@ fun VoicesScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(max = 560.dp)
                         .verticalScroll(rememberScrollState())
                 ) {
-                    if (step == 1) {
-                        // STEP 1: Info & Details
-                        Text("১. ভয়েস এর নাম (Voice Name)", color = CosmicCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    // 1. Voice Name
+                    Text("Voice Name", color = CosmicCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    OutlinedTextField(
+                        value = newVoiceName,
+                        onValueChange = { newVoiceName = it },
+                        placeholder = { Text("e.g., My Voice, Alex Narrator...", color = CosmicMutedText, fontSize = 13.sp) },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = CosmicWhite,
+                            unfocusedTextColor = CosmicWhite,
+                            focusedBorderColor = CosmicCyan,
+                            unfocusedBorderColor = LiquidGlassBorder,
+                            focusedContainerColor = LiquidGlassSurface,
+                            unfocusedContainerColor = LiquidGlassSurface
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 6.dp)
+                            .testTag("clone_name_input"),
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // 2. Spoken Language Hint (for reading scripts & AI hint)
+                    Text("Sample Language", color = CosmicCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 6.dp)
+                    ) {
+                        items(VoiceCatalog.supportedLanguages.take(8), key = { it.code }) { lang ->
+                            val isSel = selectedHintLanguage == lang.displayName
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(if (isSel) CosmicCyan else LiquidGlassSurface)
+                                    .border(1.dp, if (isSel) CosmicCyan else LiquidGlassBorder, RoundedCornerShape(14.dp))
+                                    .clickable {
+                                        selectedHintLanguage = lang.displayName
+                                        selectedScriptIndex = 0
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = lang.displayName,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isSel) DeepSpaceBackground else CosmicWhite
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // 3. Input Mode Switcher: Live Voice Record vs Upload Audio File
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        val isLive = cloneInputMode == CloneInputMode.LIVE_RECORD
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(if (isLive) CosmicViolet else LiquidGlassSurface)
+                                .border(1.dp, if (isLive) CosmicCyan else LiquidGlassBorder, RoundedCornerShape(14.dp))
+                                .clickable { cloneInputMode = CloneInputMode.LIVE_RECORD }
+                                .padding(vertical = 10.dp)
+                                .testTag("mode_live_record"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Mic, contentDescription = null, tint = CosmicWhite, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Live Record", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CosmicWhite)
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(if (!isLive) CosmicViolet else LiquidGlassSurface)
+                                .border(1.dp, if (!isLive) CosmicCyan else LiquidGlassBorder, RoundedCornerShape(14.dp))
+                                .clickable { cloneInputMode = CloneInputMode.UPLOAD_FILE }
+                                .padding(vertical = 10.dp)
+                                .testTag("mode_upload_file"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.UploadFile, contentDescription = null, tint = CosmicWhite, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Upload Audio", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CosmicWhite)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    if (cloneInputMode == CloneInputMode.LIVE_RECORD) {
+                        // Reading script tabs
+                        if (scripts.size > 1) {
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.padding(bottom = 6.dp)
+                            ) {
+                                items(scripts.indices.toList()) { index ->
+                                    val isSel = selectedScriptIndex == index
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(if (isSel) LiquidGlassSurfaceElevated else LiquidGlassSurface)
+                                            .border(1.dp, if (isSel) CosmicCyan else LiquidGlassBorder, RoundedCornerShape(10.dp))
+                                            .clickable { selectedScriptIndex = index }
+                                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Text(
+                                            text = scripts[index].title,
+                                            fontSize = 11.sp,
+                                            color = if (isSel) CosmicCyan else CosmicMutedText,
+                                            fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Script Prompt Card
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(LiquidGlassSurfaceElevated)
+                                .border(1.dp, LiquidBorderBrush, RoundedCornerShape(14.dp))
+                                .padding(12.dp)
+                        ) {
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = null, tint = CosmicCyan, modifier = Modifier.size(15.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Read aloud clearly (8–20 seconds):", fontSize = 11.sp, color = CosmicCyan, fontWeight = FontWeight.SemiBold)
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = "“${activeScript.text}”",
+                                    fontSize = 13.sp,
+                                    color = CosmicWhite,
+                                    lineHeight = 20.sp
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Waveform Visualizer & Record Controls
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(54.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(LiquidGlassSurface)
+                                .border(1.dp, LiquidGlassBorder, RoundedCornerShape(12.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isRecording) {
+                                LiveRecordingWaveform(amplitudes = recordingAmplitudes)
+                            } else if (tempSampleFile != null) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = CosmicCyan, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = tempSampleDisplayName ?: "Sample Ready",
+                                        color = CosmicCyan,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            } else {
+                                Text("Tap the microphone to start recording", color = CosmicMutedText, fontSize = 12.sp)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Text(
+                            text = if (isRecording) {
+                                String.format("Recording: 00:%02d  (Tap Stop to run Accent AI)", recordingDurationSec)
+                            } else if (tempSampleFile != null) {
+                                "Voice captured! Preview or adjust detected profile below."
+                            } else {
+                                "Tip: Record in a quiet room for studio-quality cloning"
+                            },
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (isRecording) SignalRed else CosmicMutedText,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Row(
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            if (!isRecording) {
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier
+                                        .size(60.dp)
+                                        .clip(CircleShape)
+                                        .background(LiquidRecordButtonBrush)
+                                        .border(2.dp, Color(0xFFFF6688), CircleShape)
+                                        .clickable {
+                                            if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                                                viewModel.startRecording()
+                                            } else {
+                                                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                            }
+                                        }
+                                        .testTag("start_record_button")
+                                ) {
+                                    Icon(Icons.Default.Mic, contentDescription = "Start Recording", tint = Color.White, modifier = Modifier.size(28.dp))
+                                }
+                            } else {
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier
+                                        .size(60.dp)
+                                        .clip(CircleShape)
+                                        .background(LiquidGlassSurfaceElevated)
+                                        .border(2.dp, SignalRed, CircleShape)
+                                        .clickable { viewModel.stopRecordingAndAnalyze(selectedHintLanguage) }
+                                        .testTag("stop_record_button")
+                                ) {
+                                    Icon(Icons.Default.Stop, contentDescription = "Stop and Analyze", tint = SignalRed, modifier = Modifier.size(28.dp))
+                                }
+                            }
+                        }
+                    } else {
+                        // UPLOAD VOICE FILE MODE
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(LiquidGlassSurfaceElevated)
+                                .border(1.2.dp, LiquidBorderBrush, RoundedCornerShape(16.dp))
+                                .clickable {
+                                    audioPickerLauncher.launch(
+                                        arrayOf("audio/*", "application/ogg")
+                                    )
+                                }
+                                .padding(18.dp)
+                                .testTag("pick_audio_file_button"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier
+                                        .size(50.dp)
+                                        .clip(CircleShape)
+                                        .background(CosmicCyan.copy(alpha = 0.16f))
+                                        .border(1.dp, CosmicCyan, CircleShape)
+                                ) {
+                                    Icon(Icons.Default.AudioFile, contentDescription = null, tint = CosmicCyan, modifier = Modifier.size(26.dp))
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = tempSampleDisplayName ?: "Select Voice Audio File",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = CosmicWhite,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Supports MP3, WAV, M4A, AAC, OGG, FLAC (max 15 MB)",
+                                    fontSize = 11.sp,
+                                    color = CosmicMutedText,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+
+                    // Preview button if we have a recorded or uploaded audio sample
+                    if (!isRecording && tempSampleFile != null) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(LiquidGlassSurfaceElevated)
+                                    .border(1.dp, CosmicCyan.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                                    .clickable { viewModel.playPreviewSample() }
+                                    .padding(vertical = 10.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    val previewPlaying = isPlaying && playingPath == tempSampleFile?.absolutePath
+                                    Icon(
+                                        imageVector = if (previewPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                        contentDescription = "Preview Sample",
+                                        tint = CosmicCyan,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (previewPlaying) "Playing..." else "Preview Sample",
+                                        color = CosmicCyan,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(LiquidGlassSurface)
+                                    .border(1.dp, LiquidGlassBorder, RoundedCornerShape(12.dp))
+                                    .clickable { viewModel.analyzeCurrentSample(selectedHintLanguage) }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.AutoFixHigh, contentDescription = "Re-analyze", tint = CosmicViolet, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Re-Scan AI", color = CosmicWhite, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // 4. AI Accent Detection & Acoustic Voice DNA Panel
+                    if (isAnalyzingVoice) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(LiquidGlassSurfaceElevated)
+                                .border(1.dp, CosmicCyan.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                                .padding(14.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(color = CosmicCyan, strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text("AI Accent & Voice DNA Scanning...", color = CosmicCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text("Analyzing timbre, regional accent, pitch & cadence", color = CosmicMutedText, fontSize = 10.sp)
+                                }
+                            }
+                        }
+                    } else if (analysisError != null) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(SignalRed.copy(alpha = 0.14f))
+                                .border(1.dp, SignalRed.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                                .padding(10.dp)
+                        ) {
+                            Text(
+                                text = analysisError ?: "Analysis error",
+                                color = CosmicWhite,
+                                fontSize = 11.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    } else if (voiceAnalysis != null) {
+                        AccentDetectionResultCard(analysis = voiceAnalysis!!)
+                    }
+
+                    // Editable Detected Accent & Optional Bio
+                    if (tempSampleFile != null && !isRecording) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text("Detected / Custom Accent", color = CosmicCyan, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                         OutlinedTextField(
-                            value = newVoiceName,
-                            onValueChange = { newVoiceName = it },
-                            placeholder = { Text("যেমন: আমার আসল কণ্ঠস্বর, আব্বুর কণ্ঠ...", color = CosmicMutedText, fontSize = 13.sp) },
+                            value = customAccentOverride,
+                            onValueChange = { customAccentOverride = it },
+                            placeholder = { Text("e.g., Kolkata Bengali, Indian English, British RP...", color = CosmicMutedText, fontSize = 12.sp) },
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedTextColor = CosmicWhite,
                                 unfocusedTextColor = CosmicWhite,
@@ -342,384 +757,65 @@ fun VoicesScreen(
                             ),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 6.dp),
-                            singleLine = true
+                                .padding(vertical = 4.dp),
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp)
                         )
 
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // Recording Language Selection
-                        Text("২. রেকর্ডিং এর ভাষা (Recording Language)", color = CosmicCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        Text("স্যাম্পেল টেক্সট এই ভাষায় দেওয়া হবে এবং আপনার অ্যাকসেন্ট ক্লোন করা হবে:", color = CosmicMutedText, fontSize = 11.sp)
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text("Short Description (Optional)", color = CosmicCyan, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        OutlinedTextField(
+                            value = customDescription,
+                            onValueChange = { customDescription = it },
+                            placeholder = { Text("Auto-filled from AI Voice DNA if left blank", color = CosmicMutedText, fontSize = 12.sp) },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = CosmicWhite,
+                                unfocusedTextColor = CosmicWhite,
+                                focusedBorderColor = CosmicCyan,
+                                unfocusedBorderColor = LiquidGlassBorder,
+                                focusedContainerColor = LiquidGlassSurface,
+                                unfocusedContainerColor = LiquidGlassSurface
+                            ),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 6.dp)
-                        ) {
-                            items(languages) { lang ->
-                                val isSel = selectedRecordingLanguage == lang
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .background(if (isSel) CosmicCyan else LiquidGlassSurface)
-                                        .border(1.dp, if (isSel) CosmicCyan else LiquidGlassBorder, RoundedCornerShape(16.dp))
-                                        .clickable {
-                                            selectedRecordingLanguage = lang
-                                            selectedScriptIndex = 0
-                                        }
-                                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                                ) {
-                                    Text(
-                                        text = lang,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (isSel) DeepSpaceBackground else CosmicWhite
-                                    )
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // Gender Selection
-                        Text("৩. জেন্ডার (Gender)", color = CosmicCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 6.dp)
-                        ) {
-                            genders.forEach { gender ->
-                                val isSel = selectedGender == gender
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(if (isSel) CosmicViolet else LiquidGlassSurface)
-                                        .border(1.dp, if (isSel) CosmicViolet else LiquidGlassBorder, RoundedCornerShape(12.dp))
-                                        .clickable { selectedGender = gender }
-                                        .padding(vertical = 8.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = when(gender) {
-                                            "Male" -> "পুরুষ (Male)"
-                                            "Female" -> "মহিলা (Female)"
-                                            else -> "অন্যান্য"
-                                        },
-                                        fontSize = 11.sp,
-                                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
-                                        color = CosmicWhite
-                                    )
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // Pitch / Tone Selection
-                        Text("৪. কণ্ঠস্বরের ধরণ ও পিচ (Pitch / Tone)", color = CosmicCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 6.dp)
-                        ) {
-                            items(pitchTones) { tone ->
-                                val isSel = selectedPitchTone == tone
-                                val label = when(tone) {
-                                    "Natural Warm" -> "স্বাভাবিক ও উষ্ণ"
-                                    "Deep Bass" -> "গম্ভীর ও ভারী বেস"
-                                    "Bright Crisp" -> "উজ্জ্বল ও স্পষ্ট"
-                                    "Soft Clear" -> "কোমল ও শান্ত"
-                                    else -> tone
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .background(if (isSel) CosmicPurple else LiquidGlassSurface)
-                                        .border(1.dp, if (isSel) CosmicCyan else LiquidGlassBorder, RoundedCornerShape(14.dp))
-                                        .clickable { selectedPitchTone = tone }
-                                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                                ) {
-                                    Text(
-                                        text = label,
-                                        fontSize = 11.sp,
-                                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
-                                        color = CosmicWhite
-                                    )
-                                }
-                            }
-                        }
+                                .padding(vertical = 4.dp),
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp)
+                        )
 
                         Spacer(modifier = Modifier.height(14.dp))
 
+                        // Save Voice Clone Button
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(48.dp)
                                 .clip(RoundedCornerShape(14.dp))
-                                .background(LiquidActiveButtonBrush)
-                                .clickable {
+                                .background(if (isAnalyzingVoice) SolidColor(LiquidGlassSurfaceElevated) else LiquidActiveButtonBrush)
+                                .clickable(enabled = !isAnalyzingVoice) {
                                     if (newVoiceName.isBlank()) {
-                                        Toast.makeText(context, "দয়া করে ভয়েস এর একটি নাম দিন!", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Please enter a name for your cloned voice.", Toast.LENGTH_SHORT).show()
                                         return@clickable
                                     }
-                                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                                        step = 2
-                                    } else {
-                                        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                    viewModel.saveClonedVoiceProfile(
+                                        name = newVoiceName,
+                                        fallbackGender = selectedGender,
+                                        customAccentOverride = customAccentOverride,
+                                        hintLanguage = selectedHintLanguage,
+                                        customDescription = customDescription
+                                    ) { newId ->
+                                        showCloneDialog = false
+                                        Toast.makeText(context, "Voice clone created and selected!", Toast.LENGTH_SHORT).show()
+                                        onUseVoiceInStudio(newId)
                                     }
-                                },
+                                }
+                                .testTag("save_clone_button"),
                             contentAlignment = Alignment.Center
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("পরবর্তী ধাপ: বাক্য পড়ুন ও রেকর্ড করুন", fontWeight = FontWeight.Bold, color = DeepSpaceBackground, fontSize = 13.sp)
+                                Icon(Icons.Default.Check, contentDescription = null, tint = DeepSpaceBackground, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = DeepSpaceBackground, modifier = Modifier.size(16.dp))
-                            }
-                        }
-                    } else {
-                        // STEP 2: Record Voice with language-specific sample text
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = "নির্বাচিত ভাষা: $selectedRecordingLanguage",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = CosmicCyan
-                            )
-                            TextButton(onClick = { step = 1 }) {
-                                Text("ভাষা পরিবর্তন", color = CosmicViolet, fontSize = 11.sp)
-                            }
-                        }
-
-                        // Script Selector Tabs
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                        ) {
-                            items(currentScripts.indices.toList()) { index ->
-                                val script = currentScripts[index]
-                                val isSel = selectedScriptIndex == index
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(if (isSel) LiquidGlassSurfaceElevated else LiquidGlassSurface)
-                                        .border(1.dp, if (isSel) CosmicCyan else LiquidGlassBorder, RoundedCornerShape(12.dp))
-                                        .clickable { selectedScriptIndex = index }
-                                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                                ) {
-                                    Text(
-                                        text = script.title,
-                                        fontSize = 11.sp,
-                                        color = if (isSel) CosmicCyan else CosmicMutedText,
-                                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal
-                                    )
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(6.dp))
-
-                        // Selected Sample Script Reading Card
-                        val activeScript = currentScripts.getOrNull(selectedScriptIndex) ?: currentScripts.first()
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(LiquidGlassSurfaceElevated)
-                                .border(1.dp, LiquidBorderBrush, RoundedCornerShape(16.dp))
-                                .padding(16.dp)
-                        ) {
-                            Column {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = null, tint = CosmicCyan, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("নিচের বাক্যটি স্পষ্ট উচ্চারণে পড়ুন:", fontSize = 12.sp, color = CosmicCyan, fontWeight = FontWeight.SemiBold)
-                                }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = "“${activeScript.text}”",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = CosmicWhite,
-                                    lineHeight = 22.sp
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(14.dp))
-
-                        // Waveform / Recording Visualizer
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(56.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(LiquidGlassSurface)
-                                .border(1.dp, LiquidGlassBorder, RoundedCornerShape(12.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (isRecording) {
-                                LiveRecordingWaveform(amplitudes = recordingAmplitudes)
-                            } else if (tempRecordFile != null) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Center
-                                ) {
-                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = CosmicCyan, modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("স্যাম্পেল রেকর্ড সম্পন্ন হয়েছে!", color = CosmicCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                }
-                            } else {
-                                Text("মাইক্রোফোন বাটনে ট্যাপ করে পড়া শুরু করুন", color = CosmicMutedText, fontSize = 12.sp)
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        // Recording timer
-                        Text(
-                            text = if (isRecording) String.format("● রেকর্ডিং হচ্ছে: 00:%02d / 00:20", recordingDurationSec)
-                            else if (tempRecordFile != null) "রেকর্ড করা ভয়েস শুনুন অথবা সেভ করুন"
-                            else "ন্যূনতম ৫-১০ সেকেন্ড পড়ুন",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isRecording) SignalRed else CosmicMutedText,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-
-                        Spacer(modifier = Modifier.height(14.dp))
-
-                        // Recording & Preview Controls
-                        if (!isRecording && tempRecordFile == null) {
-                            // Start Record Button
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Box(
-                                    contentAlignment = Alignment.Center,
-                                    modifier = Modifier
-                                        .size(68.dp)
-                                        .clip(CircleShape)
-                                        .background(LiquidRecordButtonBrush)
-                                        .border(2.dp, Color(0xFFFF6688), CircleShape)
-                                        .clickable { viewModel.startRecording() }
-                                ) {
-                                    Icon(Icons.Default.Mic, contentDescription = "Record", tint = Color.White, modifier = Modifier.size(32.dp))
-                                }
-                            }
-                        } else if (isRecording) {
-                            // Stop Record Button
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Box(
-                                    contentAlignment = Alignment.Center,
-                                    modifier = Modifier
-                                        .size(68.dp)
-                                        .clip(CircleShape)
-                                        .background(LiquidGlassSurfaceElevated)
-                                        .border(2.dp, SignalRed, CircleShape)
-                                        .clickable { viewModel.stopRecordingOnly() }
-                                ) {
-                                    Icon(Icons.Default.Stop, contentDescription = "Stop", tint = SignalRed, modifier = Modifier.size(32.dp))
-                                }
-                            }
-                        } else {
-                            // Preview & Save Controls
-                            Column(modifier = Modifier.fillMaxWidth()) {
-                                // Listen to sample button
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(LiquidGlassSurfaceElevated)
-                                        .border(1.dp, CosmicCyan.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-                                        .clickable { viewModel.playPreviewRecording() }
-                                        .padding(vertical = 10.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            imageVector = if (isPlaying && playingPath == tempRecordFile?.absolutePath) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                            contentDescription = "Play Preview",
-                                            tint = CosmicCyan,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = if (isPlaying && playingPath == tempRecordFile?.absolutePath) "প্লে হচ্ছে..." else "আপনার রেকর্ড করা ভয়েস শুনুন",
-                                            color = CosmicCyan,
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.height(10.dp))
-
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    // Re-record
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(LiquidGlassSurface)
-                                            .border(1.dp, LiquidGlassBorder, RoundedCornerShape(12.dp))
-                                        .clickable { viewModel.cancelRecording() }
-                                        .padding(vertical = 12.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(Icons.Default.Refresh, contentDescription = null, tint = CosmicWhite, modifier = Modifier.size(16.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("আবার রেকর্ড", color = CosmicWhite, fontSize = 12.sp)
-                                        }
-                                    }
-
-                                    // Save Button
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1.3f)
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(LiquidActiveButtonBrush)
-                                            .clickable {
-                                                viewModel.stopRecordingAndSave(
-                                                    name = newVoiceName,
-                                                    gender = selectedGender,
-                                                    accent = selectedAccent,
-                                                    recordingLanguage = selectedRecordingLanguage,
-                                                    pitchTone = selectedPitchTone,
-                                                    paceSpeed = "1.0x"
-                                                ) {
-                                                    showCreateDialog = false
-                                                    Toast.makeText(context, "ভয়েস ক্লোন সফলভাবে তৈরি হয়েছে!", Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                            .padding(vertical = 12.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(Icons.Default.Check, contentDescription = null, tint = DeepSpaceBackground, modifier = Modifier.size(16.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("ক্লোন সেভ করুন", color = DeepSpaceBackground, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                        }
-                                    }
-                                }
+                                Text("Save & Use Cloned Voice", color = DeepSpaceBackground, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                             }
                         }
                     }
@@ -730,19 +826,16 @@ fun VoicesScreen(
 }
 
 @Composable
-fun LiquidGlassVoiceCard(
-    profile: VoiceProfileEntity,
-    onDelete: () -> Unit,
-    onPlaySample: () -> Unit,
-    isPlaying: Boolean,
+private fun AccentDetectionResultCard(
+    analysis: VoiceAnalysisResult,
     modifier: Modifier = Modifier
 ) {
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(LiquidGlassSurface)
-            .border(1.dp, if (!profile.isPrebuilt) LiquidBorderBrush else Brush.linearGradient(listOf(LiquidGlassBorder, Color.Transparent)), RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(16.dp))
+            .background(CosmicCyan.copy(alpha = 0.08f))
+            .border(1.dp, LiquidBorderBrush, RoundedCornerShape(16.dp))
             .padding(12.dp)
     ) {
         Column {
@@ -751,100 +844,224 @@ fun LiquidGlassVoiceCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                // Avatar with glowing ring
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Psychology, contentDescription = null, tint = CosmicCyan, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("AI Accent & Voice DNA Detected", color = CosmicCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
                 Box(
-                    contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(if (!profile.isPrebuilt) CosmicCyan.copy(alpha = 0.2f) else CosmicViolet.copy(alpha = 0.2f))
-                        .border(1.5.dp, if (!profile.isPrebuilt) CosmicCyan else CosmicViolet, CircleShape)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(CosmicCyan.copy(alpha = 0.2f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
-                    Icon(
-                        imageVector = if (!profile.isPrebuilt) Icons.Default.RecordVoiceOver else Icons.Default.SpatialAudio,
-                        contentDescription = null,
-                        tint = if (!profile.isPrebuilt) CosmicCyan else CosmicViolet,
-                        modifier = Modifier.size(20.dp)
-                    )
+                    Text("${analysis.confidenceScore}% Match", color = CosmicCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                AnalysisPill(label = "Accent", value = analysis.detectedAccent, modifier = Modifier.weight(1.3f))
+                AnalysisPill(label = "Language", value = analysis.detectedLanguage, modifier = Modifier.weight(0.9f))
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                AnalysisPill(label = "Pitch", value = analysis.pitchProfile, modifier = Modifier.weight(1f))
+                AnalysisPill(label = "Profile", value = "${analysis.detectedGender} • ${analysis.estimatedAge}", modifier = Modifier.weight(1f))
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = analysis.timbreDescription,
+                color = CosmicWhite.copy(alpha = 0.9f),
+                fontSize = 11.sp,
+                lineHeight = 16.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun AnalysisPill(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(LiquidGlassSurface)
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+    ) {
+        Text(label.uppercase(), fontSize = 8.sp, color = CosmicMutedText, fontWeight = FontWeight.Bold)
+        Text(value, fontSize = 11.sp, color = CosmicWhite, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun CharacterVoiceCard(
+    profile: VoiceProfileEntity,
+    isPlayingSample: Boolean,
+    onUseClick: () -> Unit,
+    onPlaySample: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(LiquidGlassSurface)
+            .border(
+                1.dp,
+                if (!profile.isPrebuilt) LiquidBorderBrush else SolidColor(LiquidGlassBorder),
+                RoundedCornerShape(18.dp)
+            )
+            .padding(14.dp)
+    ) {
+        Column {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape)
+                            .background(if (!profile.isPrebuilt) CosmicCyan.copy(alpha = 0.2f) else CosmicViolet.copy(alpha = 0.22f))
+                            .border(1.5.dp, if (!profile.isPrebuilt) CosmicCyan else CosmicViolet, CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = if (!profile.isPrebuilt) Icons.Default.RecordVoiceOver else Icons.Default.SpatialAudio,
+                            contentDescription = null,
+                            tint = if (!profile.isPrebuilt) CosmicCyan else CosmicViolet,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(10.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = profile.name,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = CosmicWhite,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (!profile.isPrebuilt) CosmicCyan.copy(alpha = 0.2f) else CosmicViolet.copy(alpha = 0.25f))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = if (!profile.isPrebuilt) "CLONE" else profile.language.uppercase(),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (!profile.isPrebuilt) CosmicCyan else CosmicWhite
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(2.dp))
+
+                        Text(
+                            text = "${profile.gender} • ${profile.detectedAccent ?: profile.accent} • ${profile.pitchTone}",
+                            fontSize = 11.sp,
+                            color = CosmicCyan,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
 
                 if (!profile.isPrebuilt) {
-                    IconButton(onClick = onDelete, modifier = Modifier.size(24.dp)) {
-                        Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", tint = SignalRed.copy(alpha = 0.8f), modifier = Modifier.size(18.dp))
-                    }
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(CosmicViolet.copy(alpha = 0.25f))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Text("STUDIO", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = CosmicViolet)
+                    IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Default.DeleteOutline, contentDescription = "Delete Voice", tint = SignalRed, modifier = Modifier.size(19.dp))
                     }
                 }
+            }
+
+            if (profile.description.isNotBlank()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = profile.description,
+                    fontSize = 12.sp,
+                    color = CosmicWhite.copy(alpha = 0.84f),
+                    lineHeight = 17.sp,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            Text(
-                text = profile.name,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                color = CosmicWhite,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            // Cloned Voice highlight tag
-            if (!profile.isPrebuilt) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(CosmicCyan.copy(alpha = 0.15f))
-                        .border(0.8.dp, CosmicCyan.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Text("✨ আপনার নিজস্ব ক্লোন", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = CosmicCyan)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (!profile.isPrebuilt && profile.audioPath != null) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(LiquidGlassSurfaceElevated)
+                            .border(1.dp, LiquidGlassBorder, RoundedCornerShape(10.dp))
+                            .clickable { onPlaySample() }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = if (isPlayingSample) Icons.Default.Pause else Icons.AutoMirrored.Filled.VolumeUp,
+                                contentDescription = "Play Original Sample",
+                                tint = CosmicCyan,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = if (isPlayingSample) "Playing..." else "Original Sample",
+                                fontSize = 11.sp,
+                                color = CosmicCyan,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
                 }
-                Spacer(modifier = Modifier.height(4.dp))
-            }
 
-            Text(
-                text = "${profile.gender} • ${profile.pitchTone}",
-                fontSize = 11.sp,
-                color = CosmicMutedText,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Sample audio play button if custom audio sample exists
-            if (!profile.isPrebuilt && profile.audioPath != null) {
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth()
+                        .weight(1f)
                         .clip(RoundedCornerShape(10.dp))
-                        .background(LiquidGlassSurfaceElevated)
-                        .clickable { onPlaySample() }
-                        .padding(vertical = 6.dp),
+                        .background(LiquidActiveButtonBrush)
+                        .clickable { onUseClick() }
+                        .padding(vertical = 8.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.AutoMirrored.Filled.VolumeUp,
-                            contentDescription = null,
-                            tint = CosmicCyan,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(Icons.Default.GraphicEq, contentDescription = null, tint = DeepSpaceBackground, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(5.dp))
                         Text(
-                            text = if (isPlaying) "প্লে হচ্ছে..." else "কন্ঠস্বর শুনুন",
+                            text = "Use in Studio",
                             fontSize = 11.sp,
-                            color = CosmicCyan,
-                            fontWeight = FontWeight.SemiBold
+                            color = DeepSpaceBackground,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }
@@ -861,7 +1078,7 @@ fun LiveRecordingWaveform(
     Canvas(
         modifier = modifier
             .fillMaxWidth()
-            .height(44.dp)
+            .height(42.dp)
             .padding(horizontal = 8.dp)
     ) {
         val count = 28

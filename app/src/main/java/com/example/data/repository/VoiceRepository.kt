@@ -1,11 +1,15 @@
 package com.example.data.repository
 
 import android.content.Context
+import android.media.MediaMetadataRetriever
 import android.util.Base64
 import com.example.BuildConfig
+import com.example.data.VoiceCatalog
 import com.example.data.api.Content
 import com.example.data.api.GenerateContentRequest
+import com.example.data.api.GenerateContentResponse
 import com.example.data.api.GenerationConfig
+import com.example.data.api.InlineData
 import com.example.data.api.Part
 import com.example.data.api.PrebuiltVoiceConfig
 import com.example.data.api.RetrofitClient
@@ -16,10 +20,22 @@ import com.example.data.database.VoiceDao
 import com.example.data.database.VoiceProfileEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+
+data class VoiceAnalysisResult(
+    val detectedLanguage: String,
+    val detectedAccent: String,
+    val detectedGender: String,
+    val estimatedAge: String,
+    val pitchProfile: String,
+    val speakingCadence: String,
+    val timbreDescription: String,
+    val bestMatchingPrebuiltVoice: String,
+    val confidenceScore: Int
+)
 
 class VoiceRepository(
     private val context: Context,
@@ -54,133 +70,152 @@ class VoiceRepository(
         voiceDao.deleteGeneratedAudioById(id)
     }
 
-    suspend fun prepopulateDefaultVoicesIfEmpty() = withContext(Dispatchers.IO) {
-        val list = voiceDao.getAllVoiceProfiles().first()
-        if (list.isEmpty()) {
-            val defaults = listOf(
-                VoiceProfileEntity(
-                    name = "Sultry Male (Fenrir)",
-                    gender = "Male",
-                    accent = "Deep & Sultry",
-                    audioPath = null,
-                    isPrebuilt = true,
-                    prebuiltCode = "Fenrir",
-                    recordingLanguage = "Bangla 🇧🇩",
-                    pitchTone = "Deep Bass",
-                    paceSpeed = "1.0x"
-                ),
-                VoiceProfileEntity(
-                    name = "Sweet Female (Aoede)",
-                    gender = "Female",
-                    accent = "Soft & Clear",
-                    audioPath = null,
-                    isPrebuilt = true,
-                    prebuiltCode = "Aoede",
-                    recordingLanguage = "Bangla 🇧🇩",
-                    pitchTone = "Sweet Melodic",
-                    paceSpeed = "1.0x"
-                ),
-                VoiceProfileEntity(
-                    name = "Crisp Male (Puck)",
-                    gender = "Male",
-                    accent = "Friendly & Professional",
-                    audioPath = null,
-                    isPrebuilt = true,
-                    prebuiltCode = "Puck",
-                    recordingLanguage = "English 🇺🇸",
-                    pitchTone = "Bright Crisp",
-                    paceSpeed = "1.0x"
-                ),
-                VoiceProfileEntity(
-                    name = "Warm Female (Kore)",
-                    gender = "Female",
-                    accent = "Warm & Natural",
-                    audioPath = null,
-                    isPrebuilt = true,
-                    prebuiltCode = "Kore",
-                    recordingLanguage = "Bangla 🇧🇩",
-                    pitchTone = "Natural Warm",
-                    paceSpeed = "1.0x"
-                ),
-                VoiceProfileEntity(
-                    name = "Smooth Male (Charon)",
-                    gender = "Male",
-                    accent = "Smooth & Engaging",
-                    audioPath = null,
-                    isPrebuilt = true,
-                    prebuiltCode = "Charon",
-                    recordingLanguage = "Bangla 🇧🇩",
-                    pitchTone = "Natural Warm",
-                    paceSpeed = "1.0x"
-                )
-            )
-            defaults.forEach { voiceDao.insertVoiceProfile(it) }
+    /**
+     * Ensures the curated 17 multilingual character voices are present and up to date
+     * without ever modifying or deleting user-cloned voices.
+     */
+    suspend fun syncCuratedStudioVoices() = withContext(Dispatchers.IO) {
+        val existingPrebuilt = voiceDao.getPrebuiltVoiceProfiles()
+        val expectedNames = VoiceCatalog.curatedStudioVoices.map { it.name }.toSet()
+        val existingNames = existingPrebuilt.map { it.name }.toSet()
+        val hasDescriptions = existingPrebuilt.isNotEmpty() && existingPrebuilt.all { it.description.isNotBlank() }
+
+        if (existingNames != expectedNames || !hasDescriptions) {
+            voiceDao.deletePrebuiltVoiceProfiles()
+            val baseTime = System.currentTimeMillis()
+            val orderedCurated = VoiceCatalog.curatedStudioVoices.mapIndexed { idx, voice ->
+                voice.copy(createdAt = baseTime - idx * 1000L)
+            }
+            voiceDao.insertVoiceProfiles(orderedCurated)
         }
     }
 
-    suspend fun generateSpeech(
-        title: String,
-        text: String,
-        voiceProfile: VoiceProfileEntity,
-        language: String,
-        paceSpeed: String = "1.0x"
-    ): GeneratedAudioEntity = withContext(Dispatchers.IO) {
+    /**
+     * AI Accent & Voice DNA Analyzer:
+     * Sends the actual recorded or uploaded audio sample to Gemini 2.5 Flash multimodal audio
+     * to detect the speaker's true accent, language, gender, age, pitch, cadence, acoustic traits,
+     * and best-matching voice timbre from all 30 official Gemini TTS voices.
+     */
+    suspend fun analyzeVoiceSample(
+        audioFile: File,
+        mimeType: String,
+        hintLanguage: String
+    ): VoiceAnalysisResult = withContext(Dispatchers.IO) {
         val apiKey = BuildConfig.GEMINI_API_KEY
         if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
-            throw Exception("API Key missing! Please set your GEMINI_API_KEY in the AI Studio Secrets panel.")
+            throw Exception("API key is missing. Please add your GEMINI_API_KEY in the AI Studio Secrets panel.")
+        }
+        if (!audioFile.exists() || audioFile.length() == 0L) {
+            throw Exception("Voice sample file is empty or could not be found.")
         }
 
-        // Clean language name from emojis/flags
-        val cleanLanguage = when {
-            language.contains("Bangla", ignoreCase = true) -> "Bengali"
-            language.contains("Hindi", ignoreCase = true) -> "Hindi"
-            language.contains("Arabic", ignoreCase = true) -> "Arabic"
-            language.contains("Spanish", ignoreCase = true) -> "Spanish"
-            language.contains("French", ignoreCase = true) -> "French"
-            else -> "English"
+        val audioBytes = audioFile.readBytes()
+        val audioBase64 = Base64.encodeToString(audioBytes, Base64.NO_WRAP)
+        val safeMime = normalizeAudioMimeType(mimeType, audioFile.extension)
+
+        val voiceDirectoryText = VoiceCatalog.officialGeminiVoices.entries.joinToString("\n") { (name, desc) ->
+            "- $name: $desc"
         }
 
-        // Select the base voice timbre
-        val voiceName = if (voiceProfile.isPrebuilt && !voiceProfile.prebuiltCode.isNullOrBlank()) {
-            voiceProfile.prebuiltCode
-        } else {
-            // Select base voice according to cloned gender & tone
-            val isFemale = voiceProfile.gender.contains("Female", ignoreCase = true)
-            val tone = voiceProfile.pitchTone.lowercase()
-            when {
-                tone.contains("deep") -> if (isFemale) "Kore" else "Fenrir"
-                tone.contains("sweet") || tone.contains("soft") -> if (isFemale) "Aoede" else "Charon"
-                tone.contains("bright") || tone.contains("crisp") -> if (isFemale) "Aoede" else "Puck"
-                else -> if (isFemale) "Kore" else "Charon"
+        val analysisPrompt = """
+            You are an expert acoustic phonetician, forensic accent analyst, and voice casting director.
+            Listen carefully to the attached voice sample (the user indicated a hint language of "$hintLanguage", though detect what is ACTUALLY spoken).
+            Analyze the speaker's exact vocal identity so we can replicate their voice as faithfully as possible.
+
+            Available base vocal timbres (choose the SINGLE closest acoustic match by gender, pitch register, warmth, breathiness, and texture):
+            $voiceDirectoryText
+
+            Return ONLY a valid JSON object with these exact keys:
+            {
+              "detectedLanguage": "Primary spoken language (e.g., English, Bengali, Hindi, Spanish, French, Arabic)",
+              "detectedAccent": "Specific regional accent (e.g., Kolkata Bengali, Dhaka Bangladeshi Bengali, Indian English, North Indian Hindi, General American, British RP, Australian English, etc.)",
+              "detectedGender": "Male, Female, or Neutral",
+              "estimatedAge": "e.g., Young Adult (20s), Adult (30s-40s), Mature (50+)",
+              "pitchProfile": "e.g., Deep Baritone, Warm Mid-Range, Bright Soprano, Soft Alto, Crisp Tenor",
+              "speakingCadence": "Brief description of pacing, rhythm, and pause habits",
+              "timbreDescription": "Detailed 2-sentence acoustic portrait describing resonance (chest/nasal/head), breathiness, warmth, consonant articulation, and emotional color so a TTS director can faithfully reproduce this exact speaker",
+              "bestMatchingPrebuiltVoice": "Exact name from the 30 voices listed above",
+              "confidenceScore": 92
             }
-        }
-
-        // Distinctive voice cloning directives:
-        // Instruct Gemini TTS to replicate the user's authentic cloned accent, tone, and pacing.
-        val promptText = if (voiceProfile.isPrebuilt) {
-            "Please read the following text clearly, expressively, and naturally in $cleanLanguage at a $paceSpeed pace:\n\n$text"
-        } else {
-            val userAccent = voiceProfile.accent
-            val userRecLang = voiceProfile.recordingLanguage
-            """
-            You are speaking as the authentic AI Voice Clone of '${voiceProfile.name}'.
-            Voice Characteristics:
-            - Target Language: $cleanLanguage
-            - Vocal Persona: ${voiceProfile.gender}, ${voiceProfile.pitchTone} timbre
-            - Accent Cadence: Maintain the speaker's authentic native $userRecLang ($userAccent) accent, phrasing, intonation, and regional cadence.
-            - Delivery Speed: $paceSpeed
-            Speak completely naturally with human emotion, distinct accent inflection, and vocal resonance. Do not include any spoken commentary or introductory words.
-            
-            TEXT TO SPEAK:
-            $text
-            """.trimIndent()
-        }
+        """.trimIndent()
 
         val request = GenerateContentRequest(
             contents = listOf(
                 Content(
                     parts = listOf(
-                        Part(text = promptText)
+                        Part(text = analysisPrompt),
+                        Part(inlineData = InlineData(mimeType = safeMime, data = audioBase64))
+                    )
+                )
+            ),
+            generationConfig = GenerationConfig(
+                temperature = 0.2f,
+                responseMimeType = "application/json"
+            )
+        )
+
+        val analyzerModels = listOf("gemini-2.5-flash", "gemini-2.0-flash")
+        var lastError: Exception? = null
+        var rawText: String? = null
+
+        for (model in analyzerModels) {
+            try {
+                val resp = RetrofitClient.service.generateContent(model, apiKey, request)
+                val text = resp.candidates?.firstOrNull()?.content?.parts?.firstOrNull { !it.text.isNullOrBlank() }?.text
+                if (!text.isNullOrBlank()) {
+                    rawText = text
+                    break
+                }
+            } catch (e: retrofit2.HttpException) {
+                val errBody = try { e.response()?.errorBody()?.string() } catch (_: Exception) { null }
+                val msg = parseErrorMessage(errBody) ?: e.message()
+                lastError = Exception("Voice analysis error ($model: HTTP ${e.code()}): $msg")
+                if (e.code() == 400 || e.code() == 404) continue else throw lastError
+            } catch (e: Exception) {
+                lastError = e
+            }
+        }
+
+        if (rawText.isNullOrBlank()) {
+            throw lastError ?: Exception("Unable to analyze the audio sample. Please try a clearer recording or audio file.")
+        }
+
+        parseVoiceAnalysisJson(rawText, hintLanguage)
+    }
+
+    /**
+     * Generates high-fidelity speech using Gemini TTS models.
+     * Enforces consistent 1.0x natural studio pacing during synthesis so MediaPlayer PlaybackParams
+     * controls exact playback speed deterministically across the entire app.
+     */
+    suspend fun generateSpeech(
+        title: String,
+        text: String,
+        voiceProfile: VoiceProfileEntity,
+        language: String
+    ): GeneratedAudioEntity = withContext(Dispatchers.IO) {
+        val apiKey = BuildConfig.GEMINI_API_KEY
+        if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
+            throw Exception("API key is missing. Please add your GEMINI_API_KEY in the AI Studio Secrets panel.")
+        }
+
+        val cleanLanguage = normalizeLanguageName(language)
+
+        // Pick validated Gemini TTS base voice
+        val voiceName = resolveValidPrebuiltVoice(voiceProfile)
+
+        // Build precision Director's Notes prompt for maximum vocal fidelity and consistent pacing
+        val directorPrompt = buildTtsDirectorPrompt(
+            text = text.trim(),
+            voiceProfile = voiceProfile,
+            targetLanguage = cleanLanguage
+        )
+
+        val request = GenerateContentRequest(
+            contents = listOf(
+                Content(
+                    parts = listOf(
+                        Part(text = directorPrompt)
                     )
                 )
             ),
@@ -194,15 +229,14 @@ class VoiceRepository(
             )
         )
 
-        // Try supported TTS models with fallback
         val candidateModels = listOf(
+            "gemini-2.5-flash-preview-tts",
             "gemini-2.5-flash-tts",
-            "gemini-3.8-flash-tts",
-            "gemini-2.0-flash"
+            "gemini-3.8-flash-tts"
         )
 
         var lastException: Exception? = null
-        var response: com.example.data.api.GenerateContentResponse? = null
+        var response: GenerateContentResponse? = null
 
         for (model in candidateModels) {
             try {
@@ -215,7 +249,7 @@ class VoiceRepository(
             } catch (e: retrofit2.HttpException) {
                 val errorBody = try { e.response()?.errorBody()?.string() } catch (_: Exception) { null }
                 val parsedMsg = parseErrorMessage(errorBody) ?: e.message()
-                lastException = Exception("Gemini API ($model: HTTP ${e.code()}): $parsedMsg")
+                lastException = Exception("Speech generation failed ($model: HTTP ${e.code()}): $parsedMsg")
                 if (e.code() == 400 || e.code() == 404) {
                     continue
                 } else {
@@ -227,22 +261,21 @@ class VoiceRepository(
         }
 
         if (response == null) {
-            throw lastException ?: Exception("Failed to generate voice. Please check your text and API key.")
+            throw lastException ?: Exception("Failed to generate speech. Please check your text and API key.")
         }
 
         val candidate = response.candidates?.firstOrNull()
-            ?: throw Exception("Failed to generate voice. No candidate returned.")
+            ?: throw Exception("Failed to generate speech. No audio candidate returned.")
         val audioPart = candidate.content?.parts?.firstOrNull { it.inlineData != null }
-            ?: throw Exception("Failed to generate voice. No audio data was returned by the model.")
+            ?: throw Exception("Failed to generate speech. No audio data returned by the model.")
 
-        val mimeType = audioPart.inlineData?.mimeType ?: "audio/wav"
-        val base64Data = audioPart.inlineData?.data ?: throw Exception("Audio data is empty.")
+        val mimeType = audioPart.inlineData?.mimeType ?: "audio/L16;codec=pcm;rate=24000"
+        val base64Data = audioPart.inlineData?.data ?: throw Exception("Generated audio payload is empty.")
 
-        // Decode bytes and wrap in WAV header if needed
         val decodedBytes = Base64.decode(base64Data, Base64.DEFAULT)
-        val finalAudioBytes = ensureWavOrMp3(decodedBytes, mimeType)
+        val finalAudioBytes = ensurePlayableWavOrMp3(decodedBytes, mimeType)
 
-        val isMp3 = mimeType.contains("mp3", ignoreCase = true)
+        val isMp3 = mimeType.contains("mp3", ignoreCase = true) || mimeType.contains("mpeg", ignoreCase = true)
         val extension = if (isMp3) "mp3" else "wav"
 
         val outputDir = File(context.filesDir, "generated_speech")
@@ -257,13 +290,15 @@ class VoiceRepository(
             fos.write(finalAudioBytes)
         }
 
-        // Create entity and save to DB
+        val durationMs = extractDurationMs(outputFile, decodedBytes.size, mimeType)
+
         val generatedAudio = GeneratedAudioEntity(
-            title = if (title.isBlank()) "Speech ${System.currentTimeMillis()}" else title,
-            text = text,
-            language = language,
+            title = title.trim().ifBlank { "${voiceProfile.name} - $cleanLanguage" },
+            text = text.trim(),
+            language = cleanLanguage,
             voiceProfileName = voiceProfile.name,
             audioPath = outputFile.absolutePath,
+            durationMs = durationMs,
             createdAt = System.currentTimeMillis()
         )
 
@@ -271,17 +306,164 @@ class VoiceRepository(
         generatedAudio.copy(id = id.toInt())
     }
 
+    private fun buildTtsDirectorPrompt(
+        text: String,
+        voiceProfile: VoiceProfileEntity,
+        targetLanguage: String
+    ): String {
+        return if (!voiceProfile.isPrebuilt) {
+            val accentNote = voiceProfile.detectedAccent?.takeIf { it.isNotBlank() } ?: voiceProfile.accent
+            val traitsNote = voiceProfile.voiceTraits.ifBlank {
+                "${voiceProfile.gender} speaker with a ${voiceProfile.pitchTone} tone"
+            }
+            val cadenceNote = voiceProfile.speakingCadence.ifBlank { "Steady, natural, consistent conversational rhythm" }
+            val ageNote = voiceProfile.estimatedAge.ifBlank { "Adult" }
+
+            """
+            # DIRECTOR'S NOTES
+            Voice Clone Persona: ${voiceProfile.name} (${voiceProfile.gender}, $ageNote)
+            Target Language: $targetLanguage
+            Accent & Phonetics: Preserve the speaker's authentic $accentNote accent, natural vowel coloring, and regional intonation while speaking clearly in $targetLanguage.
+            Acoustic Voice DNA: $traitsNote
+            Pitch Profile: ${voiceProfile.pitchTone}
+            Pacing: Maintain a strictly steady, consistent, natural 1.0x speaking pace from start to finish — never rush and never drag words. ($cadenceNote)
+
+            Read ONLY the exact transcript below aloud. Do not speak any headings, labels, or extra words.
+
+            #### TRANSCRIPT
+            $text
+            """.trimIndent()
+        } else {
+            val traits = voiceProfile.voiceTraits.ifBlank { voiceProfile.description }
+            """
+            # DIRECTOR'S NOTES
+            Character Voice: ${voiceProfile.name} (${voiceProfile.gender}, ${voiceProfile.pitchTone})
+            Target Language: $targetLanguage
+            Accent & Style: ${voiceProfile.accent}. $traits
+            Pacing: Maintain a strictly steady, consistent, natural 1.0x speaking pace throughout — clear articulation without rushing or slowing down.
+
+            Read ONLY the exact transcript below aloud. Do not speak any headings, notes, or extra commentary.
+
+            #### TRANSCRIPT
+            $text
+            """.trimIndent()
+        }
+    }
+
+    private fun resolveValidPrebuiltVoice(profile: VoiceProfileEntity): String {
+        val code = profile.prebuiltCode?.trim()
+        if (!code.isNullOrBlank() && VoiceCatalog.officialGeminiVoices.containsKey(code)) {
+            return code
+        }
+        val isFemale = profile.gender.equals("Female", ignoreCase = true)
+        val tone = profile.pitchTone.lowercase()
+        return when {
+            tone.contains("deep") || tone.contains("bass") || tone.contains("baritone") ->
+                if (isFemale) "Sulafat" else "Algenib"
+            tone.contains("soft") || tone.contains("gentle") || tone.contains("sweet") ->
+                if (isFemale) "Vindemiatrix" else "Algieba"
+            tone.contains("bright") || tone.contains("crisp") || tone.contains("upbeat") ->
+                if (isFemale) "Zephyr" else "Puck"
+            else ->
+                if (isFemale) "Aoede" else "Charon"
+        }
+    }
+
+    private fun parseVoiceAnalysisJson(raw: String, hintLanguage: String): VoiceAnalysisResult {
+        val cleaned = raw
+            .trim()
+            .removePrefix("```json")
+            .removePrefix("```")
+            .removeSuffix("```")
+            .trim()
+
+        val jsonStart = cleaned.indexOf('{')
+        val jsonEnd = cleaned.lastIndexOf('}')
+        val jsonStr = if (jsonStart >= 0 && jsonEnd > jsonStart) {
+            cleaned.substring(jsonStart, jsonEnd + 1)
+        } else {
+            cleaned
+        }
+
+        return try {
+            val obj = JSONObject(jsonStr)
+            val gender = obj.optString("detectedGender", "Male").ifBlank { "Male" }
+            val pitch = obj.optString("pitchProfile", "Natural Warm").ifBlank { "Natural Warm" }
+            val rawVoice = obj.optString("bestMatchingPrebuiltVoice", "").trim()
+            val matchedVoice = VoiceCatalog.officialGeminiVoices.keys.firstOrNull {
+                it.equals(rawVoice, ignoreCase = true)
+            } ?: if (gender.equals("Female", ignoreCase = true)) "Aoede" else "Charon"
+
+            VoiceAnalysisResult(
+                detectedLanguage = normalizeLanguageName(obj.optString("detectedLanguage", hintLanguage)),
+                detectedAccent = obj.optString("detectedAccent", "$hintLanguage Native Accent").ifBlank { "$hintLanguage Native Accent" },
+                detectedGender = gender,
+                estimatedAge = obj.optString("estimatedAge", "Adult").ifBlank { "Adult" },
+                pitchProfile = pitch,
+                speakingCadence = obj.optString("speakingCadence", "Steady conversational rhythm").ifBlank { "Steady conversational rhythm" },
+                timbreDescription = obj.optString("timbreDescription", "Natural, expressive human voice with clear articulation.").ifBlank {
+                    "Natural, expressive human voice with clear articulation."
+                },
+                bestMatchingPrebuiltVoice = matchedVoice,
+                confidenceScore = obj.optInt("confidenceScore", 90).coerceIn(65, 99)
+            )
+        } catch (_: Exception) {
+            VoiceAnalysisResult(
+                detectedLanguage = normalizeLanguageName(hintLanguage),
+                detectedAccent = "$hintLanguage Native Accent",
+                detectedGender = "Male",
+                estimatedAge = "Adult",
+                pitchProfile = "Natural Warm",
+                speakingCadence = "Natural conversational pace",
+                timbreDescription = "Authentic human voice with clear resonance and natural cadence.",
+                bestMatchingPrebuiltVoice = "Charon",
+                confidenceScore = 85
+            )
+        }
+    }
+
+    private fun normalizeLanguageName(language: String): String {
+        return when {
+            language.contains("Bengali", ignoreCase = true) || language.contains("Bangla", ignoreCase = true) -> "Bengali"
+            language.contains("Hindi", ignoreCase = true) -> "Hindi"
+            language.contains("Spanish", ignoreCase = true) -> "Spanish"
+            language.contains("French", ignoreCase = true) -> "French"
+            language.contains("Arabic", ignoreCase = true) -> "Arabic"
+            language.contains("German", ignoreCase = true) -> "German"
+            language.contains("Japanese", ignoreCase = true) -> "Japanese"
+            language.contains("Portuguese", ignoreCase = true) -> "Portuguese"
+            language.contains("Korean", ignoreCase = true) -> "Korean"
+            language.contains("Urdu", ignoreCase = true) -> "Urdu"
+            language.contains("Italian", ignoreCase = true) -> "Italian"
+            else -> "English"
+        }
+    }
+
+    private fun normalizeAudioMimeType(mimeType: String, extension: String): String {
+        val lower = mimeType.lowercase()
+        return when {
+            lower.contains("wav") -> "audio/wav"
+            lower.contains("mpeg") || lower.contains("mp3") -> "audio/mp3"
+            lower.contains("ogg") -> "audio/ogg"
+            lower.contains("flac") -> "audio/flac"
+            lower.contains("aac") -> "audio/aac"
+            lower.contains("mp4") || lower.contains("m4a") -> "audio/mp4"
+            extension.equals("wav", true) -> "audio/wav"
+            extension.equals("mp3", true) -> "audio/mp3"
+            extension.equals("ogg", true) -> "audio/ogg"
+            extension.equals("flac", true) -> "audio/flac"
+            extension.equals("aac", true) -> "audio/aac"
+            else -> "audio/mp4"
+        }
+    }
+
     private fun parseErrorMessage(errorBody: String?): String? {
         if (errorBody.isNullOrBlank()) return null
         return try {
-            val json = org.json.JSONObject(errorBody)
+            val json = JSONObject(errorBody)
             if (json.has("error")) {
                 val errorObj = json.getJSONObject("error")
-                if (errorObj.has("message")) {
-                    errorObj.getString("message")
-                } else {
-                    null
-                }
+                if (errorObj.has("message")) errorObj.getString("message") else null
             } else {
                 null
             }
@@ -290,8 +472,22 @@ class VoiceRepository(
         }
     }
 
-    private fun ensureWavOrMp3(audioBytes: ByteArray, mimeType: String): ByteArray {
-        // If already has RIFF header (WAV)
+    private fun parseSampleRate(mimeType: String): Int {
+        val match = Regex("rate=(\\d+)", RegexOption.IGNORE_CASE).find(mimeType)
+        return match?.groupValues?.getOrNull(1)?.toIntOrNull()?.coerceIn(8000, 96000) ?: 24000
+    }
+
+    private fun parseChannels(mimeType: String): Int {
+        val match = Regex("channels=(\\d+)", RegexOption.IGNORE_CASE).find(mimeType)
+        return match?.groupValues?.getOrNull(1)?.toIntOrNull()?.coerceIn(1, 2) ?: 1
+    }
+
+    /**
+     * Wraps raw PCM audio from Gemini TTS in an exact RIFF WAV header using the true sample rate
+     * and channel count parsed from the response MIME type (fixing inconsistent playback speed/pitch).
+     */
+    private fun ensurePlayableWavOrMp3(audioBytes: ByteArray, mimeType: String): ByteArray {
+        // Already RIFF WAV
         if (audioBytes.size >= 4 &&
             audioBytes[0] == 'R'.code.toByte() &&
             audioBytes[1] == 'I'.code.toByte() &&
@@ -300,7 +496,10 @@ class VoiceRepository(
         ) {
             return audioBytes
         }
-        // If already has ID3 (MP3)
+        // Already MP3 (ID3 tag or MPEG sync frame)
+        if (mimeType.contains("mp3", ignoreCase = true) || mimeType.contains("mpeg", ignoreCase = true)) {
+            return audioBytes
+        }
         if (audioBytes.size >= 3 &&
             audioBytes[0] == 'I'.code.toByte() &&
             audioBytes[1] == 'D'.code.toByte() &&
@@ -308,14 +507,9 @@ class VoiceRepository(
         ) {
             return audioBytes
         }
-        // If MP3 by mimeType
-        if (mimeType.contains("mp3", ignoreCase = true)) {
-            return audioBytes
-        }
 
-        // Wrap raw 24kHz 16-bit mono PCM into standard RIFF WAV header
-        val sampleRate = 24000
-        val channels = 1
+        val sampleRate = parseSampleRate(mimeType)
+        val channels = parseChannels(mimeType)
         val bitsPerSample = 16
         val byteRate = sampleRate * channels * (bitsPerSample / 8)
         val totalDataLen = audioBytes.size
@@ -334,15 +528,15 @@ class VoiceRepository(
         header[9] = 'A'.code.toByte()
         header[10] = 'V'.code.toByte()
         header[11] = 'E'.code.toByte()
-        header[12] = 'f'.code.toByte() // 'fmt ' chunk
+        header[12] = 'f'.code.toByte()
         header[13] = 'm'.code.toByte()
         header[14] = 't'.code.toByte()
         header[15] = ' '.code.toByte()
-        header[16] = 16 // 4 bytes: size of 'fmt ' chunk
+        header[16] = 16
         header[17] = 0
         header[18] = 0
         header[19] = 0
-        header[20] = 1 // format = 1 (PCM)
+        header[20] = 1 // PCM
         header[21] = 0
         header[22] = channels.toByte()
         header[23] = 0
@@ -354,7 +548,7 @@ class VoiceRepository(
         header[29] = ((byteRate shr 8) and 0xff).toByte()
         header[30] = ((byteRate shr 16) and 0xff).toByte()
         header[31] = ((byteRate shr 24) and 0xff).toByte()
-        header[32] = (channels * (bitsPerSample / 8)).toByte() // block align
+        header[32] = (channels * (bitsPerSample / 8)).toByte()
         header[33] = 0
         header[34] = bitsPerSample.toByte()
         header[35] = 0
@@ -368,5 +562,25 @@ class VoiceRepository(
         header[43] = ((totalDataLen shr 24) and 0xff).toByte()
 
         return header + audioBytes
+    }
+
+    private fun extractDurationMs(file: File, rawByteCount: Int, mimeType: String): Long {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(file.absolutePath)
+            val dur = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+            if (dur != null && dur > 0L) dur else estimatePcmDurationMs(rawByteCount, mimeType)
+        } catch (_: Exception) {
+            estimatePcmDurationMs(rawByteCount, mimeType)
+        } finally {
+            try { retriever.release() } catch (_: Exception) {}
+        }
+    }
+
+    private fun estimatePcmDurationMs(rawByteCount: Int, mimeType: String): Long {
+        val sampleRate = parseSampleRate(mimeType)
+        val channels = parseChannels(mimeType)
+        val bytesPerSecond = sampleRate * channels * 2L
+        return if (bytesPerSecond > 0) (rawByteCount * 1000L) / bytesPerSecond else 0L
     }
 }

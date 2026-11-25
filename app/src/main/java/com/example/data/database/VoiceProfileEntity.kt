@@ -12,9 +12,16 @@ data class VoiceProfileEntity(
     val audioPath: String?,
     val isPrebuilt: Boolean,
     val prebuiltCode: String? = null,
-    val recordingLanguage: String = "Bangla 🇧🇩",
+    val recordingLanguage: String = "English",
     val pitchTone: String = "Natural Warm",
     val paceSpeed: String = "1.0x",
     val detectedAccent: String? = null,
+    val description: String = "",
+    val language: String = "English",
+    val voiceTraits: String = "",
+    val estimatedAge: String = "",
+    val speakingCadence: String = "",
+    val confidenceScore: Int = 0,
+    val audioMimeType: String = "audio/mp4",
     val createdAt: Long = System.currentTimeMillis()
 )

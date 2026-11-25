@@ -1,6 +1,5 @@
 package com.example.ui.screens
 
-import android.content.Intent
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
@@ -24,18 +23,21 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.FileProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.database.GeneratedAudioEntity
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.VoiceViewModel
-import java.io.File
+import com.example.util.AudioFileSaver
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+private val HISTORY_SPEED_OPTIONS = listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
 
 @Composable
 fun HistoryScreen(
@@ -43,13 +45,22 @@ fun HistoryScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val historyList by viewModel.generatedAudios.collectAsState()
+    val historyList by viewModel.generatedAudios.collectAsStateWithLifecycle()
+    val userMessage by viewModel.userMessage.collectAsStateWithLifecycle()
 
-    // Player states
-    val isPlaying by viewModel.isPlaying.collectAsState()
-    val playPosition by viewModel.playPosition.collectAsState()
-    val playDuration by viewModel.playDuration.collectAsState()
-    val playingPath by viewModel.playingPath.collectAsState()
+    // Global Player & Speed states
+    val isPlaying by viewModel.isPlaying.collectAsStateWithLifecycle()
+    val playPosition by viewModel.playPosition.collectAsStateWithLifecycle()
+    val playDuration by viewModel.playDuration.collectAsStateWithLifecycle()
+    val playingPath by viewModel.playingPath.collectAsStateWithLifecycle()
+    val playbackSpeed by viewModel.playbackSpeed.collectAsStateWithLifecycle()
+
+    LaunchedEffect(userMessage) {
+        userMessage?.let {
+            Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+            viewModel.clearUserMessage()
+        }
+    }
 
     Column(
         modifier = modifier
@@ -71,11 +82,11 @@ fun HistoryScreen(
                     )
                 )
             }
-            .padding(16.dp)
+            .padding(horizontal = 16.dp)
     ) {
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
-        // Title Header
+        // Header
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier
@@ -85,20 +96,62 @@ fun HistoryScreen(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "ইতিহাস (History)",
+                text = "Audio History",
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
                 color = CosmicWhite
             )
         }
         Text(
-            text = "আপনার জেনারেট করা সকল এআই ভয়েস ফাইলসমূহ",
-            fontSize = 12.sp,
+            text = "Play, download to internal storage, or share your generated clips",
+            fontSize = 11.sp,
             color = CosmicMutedText,
             modifier = Modifier.padding(start = 18.dp, top = 2.dp)
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Global Consistent Speed Bar
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(LiquidGlassSurface)
+                .border(1.dp, LiquidGlassBorder, RoundedCornerShape(14.dp))
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Speed, contentDescription = null, tint = CosmicCyan, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Speed", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = CosmicCyan)
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                HISTORY_SPEED_OPTIONS.forEach { speed ->
+                    val isSelected = kotlin.math.abs(playbackSpeed - speed) < 0.01f
+                    val label = if (speed == 1.0f) "1x" else if (speed == 2.0f) "2x" else "${speed}x"
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (isSelected) CosmicViolet else LiquidGlassSurfaceElevated)
+                            .border(1.dp, if (isSelected) CosmicCyan else LiquidGlassBorder, RoundedCornerShape(10.dp))
+                            .clickable { viewModel.setPlaybackSpeed(speed) }
+                            .padding(horizontal = 9.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = label,
+                            fontSize = 11.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            color = if (isSelected) CosmicWhite else CosmicMutedText
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
 
         if (historyList.isEmpty()) {
             Box(
@@ -116,48 +169,42 @@ fun HistoryScreen(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "ইতিহাস খালি! এখনো কোনো ভয়েস জেনারেট করা হয়নি।",
+                        text = "No generated voices yet.",
+                        color = CosmicWhite,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 15.sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Head to Studio to generate your first AI speech clip.",
                         color = CosmicMutedText,
-                        fontSize = 14.sp
+                        fontSize = 12.sp
                     )
                 }
             }
         } else {
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(bottom = 20.dp),
                 modifier = Modifier.weight(1f)
             ) {
-                items(historyList) { audio ->
+                items(historyList, key = { it.id }) { audio ->
                     val isCurrentlyPlaying = isPlaying && playingPath == audio.audioPath
 
                     LiquidGlassHistoryItem(
                         audio = audio,
                         isPlaying = isCurrentlyPlaying,
-                        playPosition = if (isCurrentlyPlaying) playPosition else 0,
-                        playDuration = if (isCurrentlyPlaying) playDuration else 0,
+                        playPosition = if (playingPath == audio.audioPath) playPosition else 0,
+                        playDuration = if (playingPath == audio.audioPath) playDuration else audio.durationMs.toInt(),
+                        playbackSpeed = playbackSpeed,
                         onPlayClick = { viewModel.playAudio(audio.audioPath) },
                         onSeek = { viewModel.seekAudio(it) },
+                        onDownloadClick = { viewModel.downloadAudio(audio) },
                         onShareClick = {
-                            val file = File(audio.audioPath)
-                            if (file.exists()) {
-                                try {
-                                    val uri = FileProvider.getUriForFile(
-                                        context,
-                                        "${context.packageName}.fileprovider",
-                                        file
-                                    )
-                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                        type = "audio/*"
-                                        putExtra(Intent.EXTRA_STREAM, uri)
-                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                    }
-                                    context.startActivity(Intent.createChooser(shareIntent, "অডিও শেয়ার করুন"))
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "শেয়ার করতে সমস্যা হয়েছে: ${e.message}", Toast.LENGTH_SHORT).show()
+                            AudioFileSaver.shareAudioFile(context, audio.audioPath, audio.title)
+                                .onFailure { err ->
+                                    Toast.makeText(context, "Unable to share: ${err.message}", Toast.LENGTH_LONG).show()
                                 }
-                            } else {
-                                Toast.makeText(context, "অডিও ফাইলটি খুঁজে পাওয়া যায়নি!", Toast.LENGTH_SHORT).show()
-                            }
                         },
                         onDeleteClick = { viewModel.deleteGeneratedAudio(audio.id) }
                     )
@@ -173,14 +220,16 @@ fun LiquidGlassHistoryItem(
     isPlaying: Boolean,
     playPosition: Int,
     playDuration: Int,
+    playbackSpeed: Float,
     onPlayClick: () -> Unit,
     onSeek: (Int) -> Unit,
+    onDownloadClick: () -> Unit,
     onShareClick: () -> Unit,
     onDeleteClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val dateStr = remember(audio.createdAt) {
-        val sdf = SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault())
+        val sdf = SimpleDateFormat("dd MMM, hh:mm a", Locale.US)
         sdf.format(Date(audio.createdAt))
     }
 
@@ -198,28 +247,31 @@ fun LiquidGlassHistoryItem(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                    // Play Button
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
-                            .size(38.dp)
+                            .size(40.dp)
                             .clip(CircleShape)
                             .background(if (isPlaying) CosmicCyan else LiquidGlassSurfaceElevated)
                             .border(1.dp, CosmicCyan, CircleShape)
                             .clickable { onPlayClick() }
+                            .testTag("history_play_${audio.id}")
                     ) {
                         Icon(
                             imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = "Play/Pause",
+                            contentDescription = if (isPlaying) "Pause" else "Play",
                             tint = if (isPlaying) DeepSpaceBackground else CosmicCyan,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(22.dp)
                         )
                     }
 
                     Spacer(modifier = Modifier.width(10.dp))
 
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = audio.title,
                             fontSize = 14.sp,
@@ -228,35 +280,29 @@ fun LiquidGlassHistoryItem(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "${audio.voiceProfileName} • ${audio.language}",
-                                fontSize = 11.sp,
-                                color = CosmicCyan
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "• $dateStr",
-                                fontSize = 10.sp,
-                                color = CosmicMutedText
-                            )
-                        }
-                    }
-                }
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = onShareClick, modifier = Modifier.size(30.dp)) {
-                        Icon(Icons.Default.Share, contentDescription = "Share", tint = CosmicCyan, modifier = Modifier.size(16.dp))
-                    }
-                    IconButton(onClick = onDeleteClick, modifier = Modifier.size(30.dp)) {
-                        Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", tint = SignalRed.copy(alpha = 0.8f), modifier = Modifier.size(16.dp))
+                        Text(
+                            text = "${audio.voiceProfileName} • ${audio.language}",
+                            fontSize = 11.sp,
+                            color = CosmicCyan,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = if (audio.durationMs > 0) {
+                                "$dateStr • ${formatAudioTime(audio.durationMs.toInt())}"
+                            } else {
+                                dateStr
+                            },
+                            fontSize = 10.sp,
+                            color = CosmicMutedText
+                        )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // Text preview
+            // Script Preview Box
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -274,11 +320,11 @@ fun LiquidGlassHistoryItem(
                 )
             }
 
-            // Seek slider when playing
+            // Seek Slider while playing
             AnimatedVisibility(visible = isPlaying && playDuration > 0) {
                 Column(modifier = Modifier.padding(top = 8.dp)) {
                     Slider(
-                        value = playPosition.toFloat(),
+                        value = playPosition.toFloat().coerceIn(0f, playDuration.toFloat()),
                         onValueChange = { onSeek(it.toInt()) },
                         valueRange = 0f..playDuration.toFloat(),
                         colors = SliderDefaults.colors(
@@ -293,16 +339,73 @@ fun LiquidGlassHistoryItem(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            text = String.format("%02d:%02d", (playPosition / 1000) / 60, (playPosition / 1000) % 60),
+                            text = formatAudioTime(playPosition),
                             fontSize = 10.sp,
                             color = CosmicMutedText
                         )
                         Text(
-                            text = String.format("%02d:%02d", (playDuration / 1000) / 60, (playDuration / 1000) % 60),
+                            text = "${playbackSpeed}x • ${formatAudioTime(playDuration)}",
                             fontSize = 10.sp,
-                            color = CosmicMutedText
+                            color = CosmicCyan
                         )
                     }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Action Buttons: Download to Internal Storage, Share, Delete
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .weight(1.2f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(CosmicCyan.copy(alpha = 0.16f))
+                        .border(1.dp, CosmicCyan.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
+                        .clickable { onDownloadClick() }
+                        .padding(vertical = 8.dp)
+                        .testTag("history_download_${audio.id}"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Download, contentDescription = "Download", tint = CosmicCyan, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text("Download", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = CosmicCyan)
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(LiquidGlassSurfaceElevated)
+                        .border(1.dp, LiquidGlassBorder, RoundedCornerShape(10.dp))
+                        .clickable { onShareClick() }
+                        .padding(vertical = 8.dp)
+                        .testTag("history_share_${audio.id}"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Share, contentDescription = "Share", tint = CosmicWhite, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text("Share", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = CosmicWhite)
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(SignalRed.copy(alpha = 0.14f))
+                        .border(1.dp, SignalRed.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+                        .clickable { onDeleteClick() }
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .testTag("history_delete_${audio.id}"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", tint = SignalRed, modifier = Modifier.size(16.dp))
                 }
             }
         }

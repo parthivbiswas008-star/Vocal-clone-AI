@@ -5,14 +5,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material3.Icon
@@ -24,7 +23,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -37,9 +35,9 @@ import com.example.ui.theme.*
 import com.example.ui.viewmodel.VoiceViewModel
 
 enum class AppTab(val title: String, val icon: ImageVector, val tag: String) {
-    TTS("ভয়েস মেকার", Icons.Default.Audiotrack, "tab_tts"),
-    VOICES("ভয়েস ক্লোন", Icons.Default.RecordVoiceOver, "tab_voices"),
-    HISTORY("ইতিহাস", Icons.Default.History, "tab_history")
+    TTS("Studio", Icons.Default.GraphicEq, "tab_tts"),
+    VOICES("Voices", Icons.Default.RecordVoiceOver, "tab_voices"),
+    HISTORY("History", Icons.Default.History, "tab_history")
 }
 
 class MainActivity : ComponentActivity() {
@@ -56,18 +54,23 @@ class MainActivity : ComponentActivity() {
 
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
+                    containerColor = DeepSpaceBackground,
                     bottomBar = {
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-                                .border(1.dp, LiquidBorderBrush, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                                .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
+                                .border(
+                                    1.dp,
+                                    LiquidBorderBrush,
+                                    RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp)
+                                )
                         ) {
                             NavigationBar(
                                 containerColor = DeepSpaceLuminous,
                                 contentColor = CosmicWhite,
                                 modifier = Modifier.testTag("bottom_nav")
                             ) {
-                                AppTab.values().forEach { tab ->
+                                AppTab.entries.forEach { tab ->
                                     val isSelected = currentTab == tab
                                     NavigationBarItem(
                                         selected = isSelected,
@@ -83,12 +86,12 @@ class MainActivity : ComponentActivity() {
                                             Text(
                                                 text = tab.title,
                                                 fontSize = 11.sp,
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                                 color = if (isSelected) CosmicCyan else CosmicMutedText
                                             )
                                         },
                                         colors = NavigationBarItemDefaults.colors(
-                                            indicatorColor = CosmicCyan.copy(alpha = 0.15f)
+                                            indicatorColor = CosmicCyan.copy(alpha = 0.16f)
                                         ),
                                         modifier = Modifier.testTag(tab.tag)
                                     )
@@ -108,7 +111,11 @@ class MainActivity : ComponentActivity() {
                                 onNavigateToProfiles = { currentTab = AppTab.VOICES }
                             )
                             AppTab.VOICES -> VoicesScreen(
-                                viewModel = viewModel
+                                viewModel = viewModel,
+                                onUseVoiceInStudio = { profileId ->
+                                    viewModel.selectVoiceProfile(profileId)
+                                    currentTab = AppTab.TTS
+                                }
                             )
                             AppTab.HISTORY -> HistoryScreen(
                                 viewModel = viewModel
@@ -121,7 +128,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@androidx.compose.runtime.Composable
+@Composable
 fun Greeting(name: String, modifier: Modifier = Modifier) {
-    androidx.compose.material3.Text(text = "Hello $name!", modifier = modifier)
+    Text(text = "Hello $name!", modifier = modifier)
 }

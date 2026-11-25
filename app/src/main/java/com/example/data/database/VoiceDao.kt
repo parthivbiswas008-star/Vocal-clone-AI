@@ -8,12 +8,21 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface VoiceDao {
-    // Voice Profiles
-    @Query("SELECT * FROM voice_profiles ORDER BY createdAt DESC")
+    // Voice Profiles (custom clones first, then curated studio characters)
+    @Query("SELECT * FROM voice_profiles ORDER BY isPrebuilt ASC, createdAt DESC")
     fun getAllVoiceProfiles(): Flow<List<VoiceProfileEntity>>
+
+    @Query("SELECT * FROM voice_profiles WHERE isPrebuilt = 1")
+    suspend fun getPrebuiltVoiceProfiles(): List<VoiceProfileEntity>
+
+    @Query("DELETE FROM voice_profiles WHERE isPrebuilt = 1")
+    suspend fun deletePrebuiltVoiceProfiles()
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertVoiceProfile(profile: VoiceProfileEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertVoiceProfiles(profiles: List<VoiceProfileEntity>)
 
     @Query("DELETE FROM voice_profiles WHERE id = :id")
     suspend fun deleteVoiceProfileById(id: Int)
