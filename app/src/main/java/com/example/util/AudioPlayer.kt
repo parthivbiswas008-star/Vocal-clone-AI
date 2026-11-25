@@ -170,6 +170,35 @@ class AudioPlayer(private val context: Context) {
         }
     }
 
+    /**
+     * Seeks to a normalized fraction (0f..1f) of the clip. If this clip is not currently loaded,
+     * starts playback immediately and jumps cleanly to the requested position.
+     */
+    fun seekOrPlayFraction(
+        filePath: String,
+        fraction: Float,
+        useCustomSpeed: Boolean = true,
+        pitchCalibration: Float = 1.0f
+    ) {
+        val clamped = fraction.coerceIn(0f, 1f)
+        if (_playingAudioPath.value == filePath && mediaPlayer != null) {
+            val dur = _duration.value.takeIf { it > 0 } ?: (mediaPlayer?.duration ?: 0)
+            if (dur > 0) {
+                seekTo((dur * clamped).toInt().coerceIn(0, dur))
+            }
+            return
+        }
+        play(
+            filePath = filePath,
+            useCustomSpeed = useCustomSpeed,
+            pitchCalibration = pitchCalibration
+        )
+        val dur = _duration.value
+        if (dur > 0) {
+            seekTo((dur * clamped).toInt().coerceIn(0, dur))
+        }
+    }
+
     private fun startTracker() {
         stopTracker()
         progressTracker = object : Runnable {
@@ -178,7 +207,7 @@ class AudioPlayer(private val context: Context) {
                     try {
                         if (player.isPlaying) {
                             _currentPosition.value = player.currentPosition
-                            handler.postDelayed(this, 100)
+                            handler.postDelayed(this, 40)
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()

@@ -657,6 +657,20 @@ class VoiceViewModel(
         audioPlayer.seekTo(positionMs)
     }
 
+    fun seekAudioFraction(
+        path: String,
+        fraction: Float,
+        useCustomSpeed: Boolean = true,
+        pitchCalibration: Float = 1.0f
+    ) {
+        audioPlayer.seekOrPlayFraction(
+            filePath = path,
+            fraction = fraction,
+            useCustomSpeed = useCustomSpeed,
+            pitchCalibration = pitchCalibration
+        )
+    }
+
     override fun onCleared() {
         super.onCleared()
         analysisJob?.cancel()

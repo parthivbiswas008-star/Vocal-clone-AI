@@ -40,6 +40,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.data.VoiceCatalog
 import com.example.data.database.VoiceProfileEntity
+import com.example.ui.components.AudioWaveformPlayerBar
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.VoiceViewModel
 import com.example.util.AudioFileSaver
@@ -1010,35 +1011,34 @@ fun TtsScreen(
                         }
                     }
 
-                    if (playingPath == latestAudio.audioPath && playDuration > 0) {
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Slider(
-                            value = playPosition.toFloat().coerceIn(0f, playDuration.toFloat()),
-                            onValueChange = { viewModel.seekAudio(it.toInt()) },
-                            valueRange = 0f..playDuration.toFloat(),
-                            colors = SliderDefaults.colors(
-                                thumbColor = CosmicCyan,
-                                activeTrackColor = CosmicCyan,
-                                inactiveTrackColor = LiquidGlassBorder
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Row(
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = formatAudioTime(playPosition),
-                                fontSize = 10.sp,
-                                color = CosmicMutedText
-                            )
-                            Text(
-                                text = formatAudioTime(playDuration),
-                                fontSize = 10.sp,
-                                color = CosmicMutedText
-                            )
-                        }
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    val isLatestActive = playingPath == latestAudio.audioPath
+                    val latestDurationMs = if (isLatestActive && playDuration > 0) {
+                        playDuration
+                    } else {
+                        latestAudio.durationMs.toInt()
                     }
+                    AudioWaveformPlayerBar(
+                        audioPath = latestAudio.audioPath,
+                        isActiveTrack = isLatestActive,
+                        isPlaying = isLatestPlaying,
+                        currentPositionMs = if (isLatestActive) playPosition else 0,
+                        durationMs = latestDurationMs,
+                        onSeekFraction = { fraction ->
+                            viewModel.seekAudioFraction(
+                                path = latestAudio.audioPath,
+                                fraction = fraction,
+                                useCustomSpeed = true,
+                                pitchCalibration = latestAudio.pitchCalibration
+                            )
+                        },
+                        barCount = 54,
+                        waveformHeight = 52.dp,
+                        showTimeLabels = true,
+                        speedLabel = "${playbackSpeed}x",
+                        testTagName = "latest_audio_waveform"
+                    )
                 }
             }
         }

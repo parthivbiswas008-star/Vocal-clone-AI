@@ -45,6 +45,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.VoiceCatalog
 import com.example.data.database.VoiceProfileEntity
 import com.example.data.repository.VoiceAnalysisResult
+import com.example.ui.components.AudioWaveformPlayerBar
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.VoiceViewModel
 import java.util.Locale
@@ -87,6 +88,8 @@ fun VoicesScreen(
     // Audio preview player states
     val isPlaying by viewModel.isPlaying.collectAsStateWithLifecycle()
     val playingPath by viewModel.playingPath.collectAsStateWithLifecycle()
+    val playPosition by viewModel.playPosition.collectAsStateWithLifecycle()
+    val playDuration by viewModel.playDuration.collectAsStateWithLifecycle()
 
     // Filter & Search state
     var activeFilter by remember { mutableStateOf("All") }
@@ -354,12 +357,26 @@ fun VoicesScreen(
                 modifier = Modifier.weight(1f)
             ) {
                 items(filteredVoices, key = { it.id }) { profile ->
+                    val isSampleActive = playingPath != null && playingPath == profile.audioPath
                     CharacterVoiceCard(
                         profile = profile,
-                        isPlayingSample = isPlaying && playingPath != null && playingPath == profile.audioPath,
+                        isSampleActive = isSampleActive,
+                        isPlayingSample = isPlaying && isSampleActive,
+                        playPositionMs = if (isSampleActive) playPosition else 0,
+                        playDurationMs = if (isSampleActive) playDuration else 0,
                         onUseClick = { onUseVoiceInStudio(profile.id) },
                         onPlaySample = {
                             profile.audioPath?.let { viewModel.playAudio(it, useCustomSpeed = false) }
+                        },
+                        onSeekSampleFraction = { fraction ->
+                            profile.audioPath?.let { path ->
+                                viewModel.seekAudioFraction(
+                                    path = path,
+                                    fraction = fraction,
+                                    useCustomSpeed = false,
+                                    pitchCalibration = 1.0f
+                                )
+                            }
                         },
                         onDelete = { viewModel.deleteVoiceProfile(profile.id) }
                     )
@@ -765,9 +782,34 @@ fun VoicesScreen(
                         }
                     }
 
-                    // Preview & Re-Scan buttons if we have a recorded or uploaded sample
+                    // Interactive Playback Waveform + Preview & Re-Scan buttons for recorded/uploaded sample
                     if (!isRecording && tempSampleFile != null) {
+                        val samplePath = tempSampleFile!!.absolutePath
+                        val isSampleActive = playingPath == samplePath
+                        val previewPlaying = isPlaying && isSampleActive
+
                         Spacer(modifier = Modifier.height(10.dp))
+                        AudioWaveformPlayerBar(
+                            audioPath = samplePath,
+                            isActiveTrack = isSampleActive,
+                            isPlaying = previewPlaying,
+                            currentPositionMs = if (isSampleActive) playPosition else 0,
+                            durationMs = if (isSampleActive) playDuration else 0,
+                            onSeekFraction = { fraction ->
+                                viewModel.seekAudioFraction(
+                                    path = samplePath,
+                                    fraction = fraction,
+                                    useCustomSpeed = false,
+                                    pitchCalibration = 1.0f
+                                )
+                            },
+                            barCount = 48,
+                            waveformHeight = 48.dp,
+                            showTimeLabels = isSampleActive,
+                            testTagName = "clone_sample_waveform"
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.fillMaxWidth()
@@ -783,7 +825,6 @@ fun VoicesScreen(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    val previewPlaying = isPlaying && playingPath == tempSampleFile?.absolutePath
                                     Icon(
                                         imageVector = if (previewPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                                         contentDescription = "Preview Sample",
@@ -880,6 +921,8 @@ fun VoicesScreen(
                         Spacer(modifier = Modifier.height(10.dp))
 
                         // 4B. Clone Calibration & Live A/B Audition Panel
+                        val auditionPath = auditionAudioFile?.absolutePath
+                        val isAuditionActive = auditionPath != null && playingPath == auditionPath
                         CloneCalibrationPanel(
                             analysis = analysis,
                             selectedBaseVoice = selectedBaseVoice.ifBlank { analysis.bestMatchingPrebuiltVoice },
@@ -890,8 +933,11 @@ fun VoicesScreen(
                             selectedEqProfile = selectedEqProfile,
                             onSelectEqProfile = { selectedEqProfile = it },
                             isAuditioning = isAuditioningClone,
-                            hasAuditionClip = auditionAudioFile != null,
-                            isPlayingAudition = isPlaying && auditionAudioFile != null && playingPath == auditionAudioFile?.absolutePath,
+                            auditionPath = auditionPath,
+                            isAuditionActive = isAuditionActive,
+                            isPlayingAudition = isPlaying && isAuditionActive,
+                            auditionPositionMs = if (isAuditionActive) playPosition else 0,
+                            auditionDurationMs = if (isAuditionActive) playDuration else 0,
                             auditionError = auditionError,
                             onRunAudition = {
                                 viewModel.runCloneAudition(
@@ -904,6 +950,16 @@ fun VoicesScreen(
                             },
                             onPlayAudition = {
                                 viewModel.playAuditionClip(pitchCalibration)
+                            },
+                            onSeekAuditionFraction = { fraction ->
+                                auditionPath?.let { path ->
+                                    viewModel.seekAudioFraction(
+                                        path = path,
+                                        fraction = fraction,
+                                        useCustomSpeed = false,
+                                        pitchCalibration = pitchCalibration
+                                    )
+                                }
                             }
                         )
                     }
@@ -1126,11 +1182,15 @@ private fun CloneCalibrationPanel(
     selectedEqProfile: String,
     onSelectEqProfile: (String) -> Unit,
     isAuditioning: Boolean,
-    hasAuditionClip: Boolean,
+    auditionPath: String?,
+    isAuditionActive: Boolean,
     isPlayingAudition: Boolean,
+    auditionPositionMs: Int,
+    auditionDurationMs: Int,
     auditionError: String?,
     onRunAudition: () -> Unit,
     onPlayAudition: () -> Unit,
+    onSeekAuditionFraction: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val pitchPercent = kotlin.math.round((pitchCalibration - 1.0f) * 100f).toInt()
@@ -1338,7 +1398,7 @@ private fun CloneCalibrationPanel(
                     }
                 }
 
-                if (hasAuditionClip) {
+                if (auditionPath != null) {
                     Box(
                         modifier = Modifier
                             .weight(1f)
@@ -1367,6 +1427,22 @@ private fun CloneCalibrationPanel(
                         }
                     }
                 }
+            }
+
+            if (auditionPath != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                AudioWaveformPlayerBar(
+                    audioPath = auditionPath,
+                    isActiveTrack = isAuditionActive,
+                    isPlaying = isPlayingAudition,
+                    currentPositionMs = auditionPositionMs,
+                    durationMs = auditionDurationMs,
+                    onSeekFraction = onSeekAuditionFraction,
+                    barCount = 44,
+                    waveformHeight = 48.dp,
+                    showTimeLabels = isAuditionActive,
+                    testTagName = "clone_audition_waveform"
+                )
             }
 
             if (!auditionError.isNullOrBlank()) {
@@ -1398,9 +1474,13 @@ private fun AnalysisPill(label: String, value: String, modifier: Modifier = Modi
 @Composable
 private fun CharacterVoiceCard(
     profile: VoiceProfileEntity,
+    isSampleActive: Boolean,
     isPlayingSample: Boolean,
+    playPositionMs: Int,
+    playDurationMs: Int,
     onUseClick: () -> Unit,
     onPlaySample: () -> Unit,
+    onSeekSampleFraction: (Float) -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1508,6 +1588,22 @@ private fun CharacterVoiceCard(
                     lineHeight = 17.sp,
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            if (!profile.isPrebuilt && profile.audioPath != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                AudioWaveformPlayerBar(
+                    audioPath = profile.audioPath,
+                    isActiveTrack = isSampleActive,
+                    isPlaying = isPlayingSample,
+                    currentPositionMs = playPositionMs,
+                    durationMs = playDurationMs,
+                    onSeekFraction = onSeekSampleFraction,
+                    barCount = 46,
+                    waveformHeight = 48.dp,
+                    showTimeLabels = isSampleActive,
+                    testTagName = "voice_clone_waveform_${profile.id}"
                 )
             }
 

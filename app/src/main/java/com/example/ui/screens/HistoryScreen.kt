@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.VoiceCatalog
 import com.example.data.database.GeneratedAudioEntity
+import com.example.ui.components.AudioWaveformPlayerBar
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.VoiceViewModel
 import com.example.util.AudioFileSaver
@@ -190,13 +191,15 @@ fun HistoryScreen(
                 modifier = Modifier.weight(1f)
             ) {
                 items(historyList, key = { it.id }) { audio ->
-                    val isCurrentlyPlaying = isPlaying && playingPath == audio.audioPath
+                    val isActiveTrack = playingPath == audio.audioPath
+                    val isCurrentlyPlaying = isPlaying && isActiveTrack
 
                     LiquidGlassHistoryItem(
                         audio = audio,
+                        isActiveTrack = isActiveTrack,
                         isPlaying = isCurrentlyPlaying,
-                        playPosition = if (playingPath == audio.audioPath) playPosition else 0,
-                        playDuration = if (playingPath == audio.audioPath) playDuration else audio.durationMs.toInt(),
+                        playPosition = if (isActiveTrack) playPosition else 0,
+                        playDuration = if (isActiveTrack && playDuration > 0) playDuration else audio.durationMs.toInt(),
                         playbackSpeed = playbackSpeed,
                         onPlayClick = {
                             viewModel.playAudio(
@@ -205,7 +208,14 @@ fun HistoryScreen(
                                 pitchCalibration = audio.pitchCalibration
                             )
                         },
-                        onSeek = { viewModel.seekAudio(it) },
+                        onSeekFraction = { fraction ->
+                            viewModel.seekAudioFraction(
+                                path = audio.audioPath,
+                                fraction = fraction,
+                                useCustomSpeed = true,
+                                pitchCalibration = audio.pitchCalibration
+                            )
+                        },
                         onDownloadClick = { viewModel.downloadAudio(audio) },
                         onShareClick = {
                             AudioFileSaver.shareAudioFile(context, audio.audioPath, audio.title)
@@ -224,12 +234,13 @@ fun HistoryScreen(
 @Composable
 fun LiquidGlassHistoryItem(
     audio: GeneratedAudioEntity,
+    isActiveTrack: Boolean,
     isPlaying: Boolean,
     playPosition: Int,
     playDuration: Int,
     playbackSpeed: Float,
     onPlayClick: () -> Unit,
-    onSeek: (Int) -> Unit,
+    onSeekFraction: (Float) -> Unit,
     onDownloadClick: () -> Unit,
     onShareClick: () -> Unit,
     onDeleteClick: () -> Unit,
@@ -353,37 +364,22 @@ fun LiquidGlassHistoryItem(
                 )
             }
 
-            // Seek Slider while playing
-            AnimatedVisibility(visible = isPlaying && playDuration > 0) {
-                Column(modifier = Modifier.padding(top = 8.dp)) {
-                    Slider(
-                        value = playPosition.toFloat().coerceIn(0f, playDuration.toFloat()),
-                        onValueChange = { onSeek(it.toInt()) },
-                        valueRange = 0f..playDuration.toFloat(),
-                        colors = SliderDefaults.colors(
-                            thumbColor = CosmicCyan,
-                            activeTrackColor = CosmicCyan,
-                            inactiveTrackColor = LiquidGlassBorder
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = formatAudioTime(playPosition),
-                            fontSize = 10.sp,
-                            color = CosmicMutedText
-                        )
-                        Text(
-                            text = "${playbackSpeed}x • ${formatAudioTime(playDuration)}",
-                            fontSize = 10.sp,
-                            color = CosmicCyan
-                        )
-                    }
-                }
-            }
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Interactive Visual Waveform Display (tap or drag to seek)
+            AudioWaveformPlayerBar(
+                audioPath = audio.audioPath,
+                isActiveTrack = isActiveTrack,
+                isPlaying = isPlaying,
+                currentPositionMs = playPosition,
+                durationMs = playDuration,
+                onSeekFraction = onSeekFraction,
+                barCount = 50,
+                waveformHeight = 48.dp,
+                showTimeLabels = true,
+                speedLabel = if (isActiveTrack) "${playbackSpeed}x" else null,
+                testTagName = "history_waveform_${audio.id}"
+            )
 
             Spacer(modifier = Modifier.height(10.dp))
 
