@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -19,11 +20,20 @@ import java.io.FileOutputStream
 data class ImportedAudioFile(
     val file: File,
     val mimeType: String,
-    val displayName: String
+    val displayName: String,
+    val durationMs: Long,
+    val sizeBytes: Long
 )
 
 object AudioFileSaver {
-    private const val MAX_UPLOAD_BYTES = 15L * 1024L * 1024L // 15 MB
+    private const val MAX_UPLOAD_BYTES = 18L * 1024L * 1024L // 18 MB (safely within Gemini 20 MB inline limit)
+
+    private val SUPPORTED_AUDIO_EXTENSIONS = setOf(
+        "mp3", "wav", "m4a", "aac", "ogg", "oga", "opus", "flac", "webm", "amr", "3gp", "3gpp", "aiff", "aif", "wma"
+    )
+    private val SUPPORTED_VIDEO_EXTENSIONS = setOf(
+        "mp4", "mov", "mkv", "m4v"
+    )
 
     /**
      * Saves an audio file directly to the device's Downloads/AI_Voice_Clone folder
@@ -44,7 +54,9 @@ object AudioFileSaver {
             val mimeType = when (extension) {
                 "mp3" -> "audio/mpeg"
                 "m4a", "mp4" -> "audio/mp4"
-                "ogg" -> "audio/ogg"
+                "ogg", "opus" -> "audio/ogg"
+                "aac" -> "audio/aac"
+                "flac" -> "audio/flac"
                 else -> "audio/wav"
             }
 
@@ -106,7 +118,9 @@ object AudioFileSaver {
             val mimeType = when (file.extension.lowercase()) {
                 "mp3" -> "audio/mpeg"
                 "m4a", "mp4" -> "audio/mp4"
-                "ogg" -> "audio/ogg"
+                "ogg", "opus" -> "audio/ogg"
+                "aac" -> "audio/aac"
+                "flac" -> "audio/flac"
                 else -> "audio/wav"
             }
 
@@ -133,7 +147,9 @@ object AudioFileSaver {
     }
 
     /**
-     * Imports a user-selected audio file via SAF URI into app-private cache for analysis & cloning.
+     * Imports a user-selected voice file (audio or video clip) via zero-permission SAF URI
+     * into app-private cache for AI Accent & Voice DNA analysis and cloning.
+     * Supports MP3, WAV, M4A, AAC, OGG, OPUS (WhatsApp), FLAC, AMR, 3GP, WebM, MP4, MOV, MKV.
      */
     suspend fun importAudioFromUri(context: Context, uri: Uri): Result<ImportedAudioFile> =
         withContext(Dispatchers.IO) {
@@ -157,32 +173,53 @@ object AudioFileSaver {
 
                 if (fileSize > MAX_UPLOAD_BYTES) {
                     return@withContext Result.failure(
-                        Exception("Audio file is too large (max 15 MB). Please choose a 10–60 second voice clip.")
+                        Exception("File is too large (max 18 MB). Please choose a 5–60 second voice or video clip.")
                     )
                 }
 
                 val rawMime = resolver.getType(uri)?.lowercase().orEmpty()
                 val extFromName = displayName.substringAfterLast('.', "").lowercase()
 
+                val isSupportedByExt = extFromName in SUPPORTED_AUDIO_EXTENSIONS || extFromName in SUPPORTED_VIDEO_EXTENSIONS
+                val isSupportedByMime = rawMime.startsWith("audio/") || rawMime.startsWith("video/") || rawMime == "application/ogg"
+
+                if (!isSupportedByExt && !isSupportedByMime && extFromName.isNotBlank()) {
+                    return@withContext Result.failure(
+                        Exception("Unsupported file type (.$extFromName). Please select an audio or video file (MP3, WAV, M4A, OPUS, OGG, AAC, FLAC, AMR, 3GP, MP4, WebM).")
+                    )
+                }
+
                 val resolvedMime = when {
-                    rawMime.startsWith("audio/") && rawMime != "audio/*" -> rawMime
                     extFromName == "wav" -> "audio/wav"
-                    extFromName == "mp3" -> "audio/mpeg"
-                    extFromName == "m4a" || extFromName == "mp4" -> "audio/mp4"
+                    extFromName == "mp3" -> "audio/mp3"
+                    extFromName == "m4a" -> "audio/mp4"
                     extFromName == "aac" -> "audio/aac"
-                    extFromName == "ogg" || extFromName == "oga" -> "audio/ogg"
+                    extFromName == "ogg" || extFromName == "oga" || extFromName == "opus" -> "audio/ogg"
                     extFromName == "flac" -> "audio/flac"
-                    extFromName == "webm" -> "audio/webm"
-                    else -> "audio/mpeg"
+                    extFromName == "amr" -> "audio/amr"
+                    extFromName == "3gp" || extFromName == "3gpp" -> "audio/3gpp"
+                    extFromName == "aiff" || extFromName == "aif" -> "audio/aiff"
+                    extFromName == "mp4" || extFromName == "m4v" -> "video/mp4"
+                    extFromName == "mov" -> "video/quicktime"
+                    extFromName == "mkv" -> "video/x-matroska"
+                    extFromName == "webm" -> if (rawMime.startsWith("video/")) "video/webm" else "audio/webm"
+                    rawMime.startsWith("audio/") && rawMime != "audio/*" -> rawMime
+                    rawMime.startsWith("video/") && rawMime != "video/*" -> rawMime
+                    rawMime == "application/ogg" -> "audio/ogg"
+                    else -> "audio/mp3"
                 }
 
                 val resolvedExt = when {
                     extFromName.isNotBlank() && extFromName.length <= 5 -> extFromName
                     resolvedMime.contains("wav") -> "wav"
-                    resolvedMime.contains("mp4") || resolvedMime.contains("m4a") -> "m4a"
-                    resolvedMime.contains("ogg") -> "ogg"
+                    resolvedMime.contains("ogg") || resolvedMime.contains("opus") -> "ogg"
                     resolvedMime.contains("aac") -> "aac"
                     resolvedMime.contains("flac") -> "flac"
+                    resolvedMime.contains("amr") -> "amr"
+                    resolvedMime.contains("3gp") -> "3gp"
+                    resolvedMime.contains("webm") -> "webm"
+                    resolvedMime.startsWith("video/mp4") -> "mp4"
+                    resolvedMime.contains("mp4") || resolvedMime.contains("m4a") -> "m4a"
                     else -> "mp3"
                 }
 
@@ -201,28 +238,47 @@ object AudioFileSaver {
                             if (totalCopied > MAX_UPLOAD_BYTES) {
                                 destFile.delete()
                                 return@withContext Result.failure(
-                                    Exception("Audio file exceeds 15 MB limit. Please select a shorter clip.")
+                                    Exception("File exceeds the 18 MB limit. Please select a shorter voice clip.")
                                 )
                             }
                             output.write(buffer, 0, read)
                         }
                     }
-                } ?: return@withContext Result.failure(Exception("Could not read the selected audio file."))
+                } ?: return@withContext Result.failure(Exception("Could not read the selected file."))
 
                 if (destFile.length() == 0L) {
                     destFile.delete()
-                    return@withContext Result.failure(Exception("The selected audio file is empty."))
+                    return@withContext Result.failure(Exception("The selected file is empty."))
                 }
+
+                val durationMs = extractMediaDurationMs(destFile)
 
                 Result.success(
                     ImportedAudioFile(
                         file = destFile,
                         mimeType = resolvedMime,
-                        displayName = displayName
+                        displayName = displayName,
+                        durationMs = durationMs,
+                        sizeBytes = destFile.length()
                     )
                 )
             } catch (e: Exception) {
                 Result.failure(e)
             }
         }
+
+    fun extractMediaDurationMs(file: File): Long {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(file.absolutePath)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+        } catch (_: Exception) {
+            0L
+        } finally {
+            try {
+                retriever.release()
+            } catch (_: Exception) {
+            }
+        }
+    }
 }

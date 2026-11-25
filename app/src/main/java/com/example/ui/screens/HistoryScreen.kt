@@ -29,6 +29,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.VoiceCatalog
 import com.example.data.database.GeneratedAudioEntity
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.VoiceViewModel
@@ -232,6 +233,9 @@ fun LiquidGlassHistoryItem(
         val sdf = SimpleDateFormat("dd MMM, hh:mm a", Locale.US)
         sdf.format(Date(audio.createdAt))
     }
+    val langFlag = remember(audio.language) {
+        VoiceCatalog.flagForLanguage(audio.language)
+    }
 
     Box(
         modifier = modifier
@@ -281,7 +285,7 @@ fun LiquidGlassHistoryItem(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "${audio.voiceProfileName} • ${audio.language}",
+                            text = "${audio.voiceProfileName} • $langFlag ${audio.language}",
                             fontSize = 11.sp,
                             color = CosmicCyan,
                             maxLines = 1,

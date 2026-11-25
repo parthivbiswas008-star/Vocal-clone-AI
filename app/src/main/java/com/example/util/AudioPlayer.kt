@@ -11,6 +11,7 @@ import java.io.File
 
 class AudioPlayer(private val context: Context) {
     private var mediaPlayer: MediaPlayer? = null
+    private var currentUseCustomSpeed: Boolean = true
 
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying
@@ -33,6 +34,7 @@ class AudioPlayer(private val context: Context) {
     fun setPlaybackSpeed(speed: Float) {
         val clamped = speed.coerceIn(0.5f, 2.0f)
         _playbackSpeed.value = clamped
+        if (!currentUseCustomSpeed) return
         mediaPlayer?.let { player ->
             try {
                 val wasPlaying = player.isPlaying
@@ -41,7 +43,6 @@ class AudioPlayer(private val context: Context) {
                 params.pitch = 1.0f
                 player.playbackParams = params
                 if (!wasPlaying && player.isPlaying) {
-                    // Setting playbackParams on some devices resumes playback; preserve paused state
                     player.pause()
                 }
             } catch (e: Exception) {
@@ -50,7 +51,11 @@ class AudioPlayer(private val context: Context) {
         }
     }
 
-    fun play(filePath: String, onFinished: () -> Unit = {}) {
+    fun play(
+        filePath: String,
+        useCustomSpeed: Boolean = true,
+        onFinished: () -> Unit = {}
+    ) {
         val file = File(filePath)
         if (!file.exists() || file.length() == 0L) {
             return
@@ -64,19 +69,22 @@ class AudioPlayer(private val context: Context) {
                         _isPlaying.value = false
                         stopTracker()
                     } else {
-                        applySpeedToPlayer(player, _playbackSpeed.value)
+                        currentUseCustomSpeed = useCustomSpeed
+                        val targetSpeed = if (useCustomSpeed) _playbackSpeed.value else 1.0f
+                        applySpeedToPlayer(player, targetSpeed)
                         player.start()
                         _isPlaying.value = true
                         startTracker()
                     }
                     return
                 } catch (_: Exception) {
-                    // Fall through to cleanly recreate player
+                    // Recreate player cleanly below
                 }
             }
         }
 
         stop()
+        currentUseCustomSpeed = useCustomSpeed
         _playingAudioPath.value = filePath
         try {
             mediaPlayer = MediaPlayer().apply {
@@ -89,8 +97,11 @@ class AudioPlayer(private val context: Context) {
                 setDataSource(filePath)
                 prepare()
                 _duration.value = this.duration
-                applySpeedToPlayer(this, _playbackSpeed.value)
-                start()
+                val targetSpeed = if (useCustomSpeed) _playbackSpeed.value else 1.0f
+                applySpeedToPlayer(this, targetSpeed)
+                if (!isPlaying) {
+                    start()
+                }
                 _isPlaying.value = true
 
                 setOnCompletionListener {

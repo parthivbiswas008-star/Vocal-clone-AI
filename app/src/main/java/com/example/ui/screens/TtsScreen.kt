@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import android.content.ClipboardManager
+import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -26,7 +28,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -42,6 +43,7 @@ import com.example.data.database.VoiceProfileEntity
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.VoiceViewModel
 import com.example.util.AudioFileSaver
+import java.util.Locale
 
 private val SPEED_OPTIONS = listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
 
@@ -53,10 +55,11 @@ fun TtsScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val clipboardManager = LocalClipboardManager.current
 
     val voiceProfiles by viewModel.voiceProfiles.collectAsStateWithLifecycle()
     val selectedVoiceId by viewModel.selectedVoiceId.collectAsStateWithLifecycle()
+    val selectedLanguage by viewModel.selectedLanguage.collectAsStateWithLifecycle()
+    val hasApiKey by viewModel.hasApiKey.collectAsStateWithLifecycle()
     val isGenerating by viewModel.isGenerating.collectAsStateWithLifecycle()
     val generationError by viewModel.generationError.collectAsStateWithLifecycle()
     val generationSuccess by viewModel.generationSuccess.collectAsStateWithLifecycle()
@@ -72,7 +75,6 @@ fun TtsScreen(
 
     var textToSpeak by remember { mutableStateOf("") }
     var speechTitle by remember { mutableStateOf("") }
-    var selectedLanguage by remember { mutableStateOf("English") }
     var expandedDropdown by remember { mutableStateOf(false) }
 
     val selectedProfile: VoiceProfileEntity? by remember(voiceProfiles, selectedVoiceId) {
@@ -129,13 +131,16 @@ fun TtsScreen(
     ) {
         Spacer(modifier = Modifier.height(14.dp))
 
-        // App Brand Header
+        // App Brand Header + Interactive API Key Status Pill
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
                 Box(
                     modifier = Modifier
                         .size(44.dp)
@@ -149,49 +154,104 @@ fun TtsScreen(
                     )
                 }
 
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(10.dp))
 
                 Column {
                     Text(
                         text = "AI Voice Clone Maker",
-                        fontSize = 18.sp,
+                        fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,
-                        color = CosmicWhite
+                        color = CosmicWhite,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = "Multilingual TTS & Voice Cloning Studio",
                         fontSize = 11.sp,
-                        color = CosmicMutedText
+                        color = CosmicMutedText,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
 
+            Spacer(modifier = Modifier.width(8.dp))
+
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(LiquidGlassSurfaceElevated)
-                    .border(0.8.dp, CosmicCyan.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-                    .padding(horizontal = 8.dp, vertical = 5.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(if (hasApiKey) LiquidGlassSurfaceElevated else SignalRed.copy(alpha = 0.2f))
+                    .border(
+                        1.dp,
+                        if (hasApiKey) CosmicCyan.copy(alpha = 0.6f) else SignalRed.copy(alpha = 0.8f),
+                        RoundedCornerShape(14.dp)
+                    )
+                    .clickable { viewModel.openApiKeyDialog() }
+                    .padding(horizontal = 10.dp, vertical = 7.dp)
+                    .testTag("api_key_button")
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .clip(CircleShape)
-                            .background(CosmicCyan)
+                    Icon(
+                        imageVector = Icons.Default.Key,
+                        contentDescription = "Configure Gemini API Key",
+                        tint = if (hasApiKey) CosmicCyan else SignalRed,
+                        modifier = Modifier.size(14.dp)
                     )
                     Spacer(modifier = Modifier.width(5.dp))
                     Text(
-                        text = "HD AUDIO",
-                        fontSize = 9.sp,
+                        text = if (hasApiKey) "API Key" else "Set Key",
+                        fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
-                        color = CosmicCyan
+                        color = if (hasApiKey) CosmicCyan else CosmicWhite
                     )
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        // Inline helper banner when API key is missing
+        if (!hasApiKey) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(SignalRed.copy(alpha = 0.14f))
+                    .border(1.dp, SignalRed.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
+                    .clickable { viewModel.openApiKeyDialog() }
+                    .padding(12.dp)
+                    .testTag("missing_api_key_banner")
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.VpnKey, contentDescription = null, tint = SignalRed, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "Gemini API Key Required",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = CosmicWhite
+                            )
+                            Text(
+                                text = "Tap here to paste & verify your free Gemini API key",
+                                fontSize = 10.sp,
+                                color = CosmicMutedText
+                            )
+                        }
+                    }
+                    Icon(Icons.Default.ChevronRight, contentDescription = "Open API Key Setup", tint = CosmicCyan, modifier = Modifier.size(20.dp))
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
 
         // 1. Voice Selector Card
         Box(
@@ -221,7 +281,7 @@ fun TtsScreen(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (selectedProfile?.isPrebuilt == false) "Active Cloned Voice" else "Active Studio Character",
+                            text = if (selectedProfile?.isPrebuilt == false) "Active Cloned Voice" else "Active Voice Model (${voiceProfiles.size} Available)",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = if (selectedProfile?.isPrebuilt == false) CosmicCyan else CosmicMutedText
@@ -267,6 +327,7 @@ fun TtsScreen(
                                         color = CosmicWhite
                                     )
                                     if (selectedProfile != null) {
+                                        val langFlag = VoiceCatalog.flagForLanguage(selectedProfile!!.language)
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Box(
                                             modifier = Modifier
@@ -278,7 +339,11 @@ fun TtsScreen(
                                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                                         ) {
                                             Text(
-                                                text = if (!selectedProfile!!.isPrebuilt) "CLONED" else selectedProfile!!.language.uppercase(),
+                                                text = if (!selectedProfile!!.isPrebuilt) {
+                                                    "$langFlag CLONED"
+                                                } else {
+                                                    "$langFlag ${selectedProfile!!.language.uppercase()}"
+                                                },
                                                 fontSize = 9.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = if (!selectedProfile!!.isPrebuilt) CosmicCyan else CosmicWhite
@@ -321,7 +386,7 @@ fun TtsScreen(
                         onDismissRequest = { expandedDropdown = false },
                         modifier = Modifier
                             .fillMaxWidth(0.9f)
-                            .heightIn(max = 380.dp)
+                            .heightIn(max = 400.dp)
                             .clip(RoundedCornerShape(16.dp))
                             .background(DeepSpaceLuminous)
                             .border(1.dp, LiquidBorderBrush, RoundedCornerShape(16.dp))
@@ -343,6 +408,7 @@ fun TtsScreen(
                         HorizontalDivider(color = LiquidGlassBorder, thickness = 0.8.dp)
 
                         voiceProfiles.forEach { profile ->
+                            val langFlag = VoiceCatalog.flagForLanguage(profile.language)
                             DropdownMenuItem(
                                 text = {
                                     Column(modifier = Modifier.padding(vertical = 2.dp)) {
@@ -364,7 +430,7 @@ fun TtsScreen(
                                                     .padding(horizontal = 5.dp, vertical = 1.dp)
                                             ) {
                                                 Text(
-                                                    text = if (!profile.isPrebuilt) "MY CLONE" else profile.language,
+                                                    text = if (!profile.isPrebuilt) "$langFlag MY CLONE" else "$langFlag ${profile.language}",
                                                     fontSize = 9.sp,
                                                     color = if (!profile.isPrebuilt) CosmicCyan else CosmicWhite,
                                                     fontWeight = FontWeight.Bold
@@ -388,11 +454,7 @@ fun TtsScreen(
                                     }
                                 },
                                 onClick = {
-                                    viewModel.selectVoiceProfile(profile.id)
-                                    // Match default target language if user chooses a language-specific character
-                                    if (profile.isPrebuilt && VoiceCatalog.supportedLanguages.any { it.displayName == profile.language }) {
-                                        selectedLanguage = profile.language
-                                    }
+                                    viewModel.selectVoiceProfile(profile.id, syncLanguage = profile.isPrebuilt)
                                     expandedDropdown = false
                                 }
                             )
@@ -404,9 +466,9 @@ fun TtsScreen(
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // 2. Output Language Selector
+        // 2. Output Language Selector with Country Flags
         Text(
-            text = "Output Language",
+            text = "Output Language (${VoiceCatalog.supportedLanguages.size} Languages)",
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
             color = CosmicCyan
@@ -427,12 +489,12 @@ fun TtsScreen(
                             if (isSelected) CosmicCyan else LiquidGlassBorder,
                             RoundedCornerShape(16.dp)
                         )
-                        .clickable { selectedLanguage = lang.displayName }
-                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                        .clickable { viewModel.selectLanguage(lang.displayName) }
+                        .padding(horizontal = 13.dp, vertical = 8.dp)
                         .testTag("lang_chip_${lang.displayName.lowercase()}")
                 ) {
                     Text(
-                        text = lang.displayName,
+                        text = lang.labelWithFlag,
                         fontSize = 12.sp,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                         color = if (isSelected) DeepSpaceBackground else CosmicWhite
@@ -514,6 +576,7 @@ fun TtsScreen(
         Spacer(modifier = Modifier.height(12.dp))
 
         // 5. Script / Text Input Card
+        val activeLangFlag = VoiceCatalog.flagForLanguage(selectedLanguage)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -529,7 +592,7 @@ fun TtsScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "Script to Speak ($selectedLanguage)",
+                        text = "Script to Speak ($activeLangFlag $selectedLanguage)",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = CosmicCyan
@@ -538,7 +601,11 @@ fun TtsScreen(
                     Row {
                         IconButton(
                             onClick = {
-                                clipboardManager.getText()?.text?.let { textToSpeak = it }
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                val clip = clipboard?.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()
+                                if (!clip.isNullOrBlank()) {
+                                    textToSpeak = clip
+                                }
                             },
                             modifier = Modifier.size(32.dp)
                         ) {
@@ -662,7 +729,7 @@ fun TtsScreen(
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "Synthesizing High-Fidelity Audio...",
+                        text = "Synthesizing Pure Studio Audio...",
                         color = CosmicCyan,
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp
@@ -693,6 +760,7 @@ fun TtsScreen(
         val latestAudio = generatedAudios.firstOrNull()
         if (latestAudio != null) {
             val isLatestPlaying = isPlaying && playingPath == latestAudio.audioPath
+            val latestLangFlag = VoiceCatalog.flagForLanguage(latestAudio.language)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -738,7 +806,7 @@ fun TtsScreen(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "${latestAudio.voiceProfileName} • ${latestAudio.language} • ${playbackSpeed}x",
+                                    text = "${latestAudio.voiceProfileName} • $latestLangFlag ${latestAudio.language} • ${playbackSpeed}x",
                                     fontSize = 11.sp,
                                     color = CosmicCyan,
                                     maxLines = 1,
@@ -807,5 +875,5 @@ fun TtsScreen(
 
 fun formatAudioTime(ms: Int): String {
     val totalSec = (ms / 1000).coerceAtLeast(0)
-    return String.format("%02d:%02d", totalSec / 60, totalSec % 60)
+    return String.format(Locale.US, "%02d:%02d", totalSec / 60, totalSec % 60)
 }

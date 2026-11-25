@@ -47,8 +47,13 @@ import com.example.data.database.VoiceProfileEntity
 import com.example.data.repository.VoiceAnalysisResult
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.VoiceViewModel
+import java.util.Locale
 
 private enum class CloneInputMode { LIVE_RECORD, UPLOAD_FILE }
+
+private val PRIMARY_FILTER_LANGUAGES = setOf(
+    "English", "Bengali", "Hindi", "Spanish", "French", "Arabic", "German", "Japanese", "Urdu"
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -66,11 +71,13 @@ fun VoicesScreen(
     val recordingAmplitudes by viewModel.recordingAmplitudes.collectAsStateWithLifecycle()
     val tempSampleFile by viewModel.tempSampleFile.collectAsStateWithLifecycle()
     val tempSampleDisplayName by viewModel.tempSampleDisplayName.collectAsStateWithLifecycle()
+    val tempSampleMeta by viewModel.tempSampleMeta.collectAsStateWithLifecycle()
 
     // AI Accent & Voice DNA Analysis states
     val isAnalyzingVoice by viewModel.isAnalyzingVoice.collectAsStateWithLifecycle()
     val voiceAnalysis by viewModel.voiceAnalysis.collectAsStateWithLifecycle()
     val analysisError by viewModel.analysisError.collectAsStateWithLifecycle()
+    val analysisNeedsApiKey by viewModel.analysisNeedsApiKey.collectAsStateWithLifecycle()
 
     // Audio preview player states
     val isPlaying by viewModel.isPlaying.collectAsStateWithLifecycle()
@@ -82,16 +89,14 @@ fun VoicesScreen(
     val filteredVoices by remember(voiceProfiles, activeFilter) {
         derivedStateOf {
             when (activeFilter) {
+                "All" -> voiceProfiles
                 "My Clones" -> voiceProfiles.filter { !it.isPrebuilt }
-                "English" -> voiceProfiles.filter { it.language.equals("English", ignoreCase = true) }
-                "Bengali" -> voiceProfiles.filter { it.language.equals("Bengali", ignoreCase = true) }
-                "Hindi" -> voiceProfiles.filter { it.language.equals("Hindi", ignoreCase = true) }
-                "Global" -> voiceProfiles.filter {
-                    it.isPrebuilt && !it.language.equals("English", true) &&
-                        !it.language.equals("Bengali", true) &&
-                        !it.language.equals("Hindi", true)
+                "More" -> voiceProfiles.filter {
+                    it.isPrebuilt && PRIMARY_FILTER_LANGUAGES.none { primary ->
+                        it.language.equals(primary, ignoreCase = true)
+                    }
                 }
-                else -> voiceProfiles
+                else -> voiceProfiles.filter { it.language.equals(activeFilter, ignoreCase = true) }
             }
         }
     }
@@ -106,7 +111,7 @@ fun VoicesScreen(
     var customDescription by remember { mutableStateOf("") }
     var selectedScriptIndex by remember { mutableStateOf(0) }
 
-    // Keep accent field auto-populated when AI Accent Detection finishes
+    // Keep accent & gender auto-populated when AI Accent Detection finishes
     LaunchedEffect(voiceAnalysis) {
         voiceAnalysis?.let { result ->
             customAccentOverride = result.detectedAccent
@@ -114,8 +119,8 @@ fun VoicesScreen(
         }
     }
 
-    // Zero-permission SAF Audio File Picker
-    val audioPickerLauncher = rememberLauncherForActivityResult(
+    // Zero-permission SAF Multi-Format Media Picker (audio, WhatsApp opus/ogg, voice memos, video clips)
+    val mediaPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
@@ -174,14 +179,14 @@ fun VoicesScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Voice Library & Cloning",
-                        fontSize = 20.sp,
+                        text = "Voice Models & Cloning",
+                        fontSize = 19.sp,
                         fontWeight = FontWeight.Bold,
                         color = CosmicWhite
                     )
                 }
                 Text(
-                    text = "Clone via live mic or file upload with AI accent detection",
+                    text = "${voiceProfiles.size} multilingual voices • Live mic & multi-format upload",
                     fontSize = 11.sp,
                     color = CosmicMutedText,
                     modifier = Modifier.padding(start = 18.dp, top = 2.dp)
@@ -216,13 +221,13 @@ fun VoicesScreen(
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Category Filter Chips
+        // Category Filter Chips with Country Flags
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            items(VoiceCatalog.voiceFilterCategories, key = { it }) { category ->
-                val isSelected = activeFilter == category
+            items(VoiceCatalog.voiceFilterOptions, key = { it.key }) { option ->
+                val isSelected = activeFilter == option.key
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(16.dp))
@@ -232,12 +237,12 @@ fun VoicesScreen(
                             if (isSelected) CosmicCyan else LiquidGlassBorder,
                             RoundedCornerShape(16.dp)
                         )
-                        .clickable { activeFilter = category }
-                        .padding(horizontal = 14.dp, vertical = 7.dp)
-                        .testTag("filter_${category.lowercase().replace(" ", "_")}")
+                        .clickable { activeFilter = option.key }
+                        .padding(horizontal = 13.dp, vertical = 7.dp)
+                        .testTag("filter_${option.key.lowercase().replace(" ", "_")}")
                 ) {
                     Text(
-                        text = category,
+                        text = option.labelWithFlag,
                         fontSize = 12.sp,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                         color = if (isSelected) DeepSpaceBackground else CosmicWhite
@@ -265,7 +270,7 @@ fun VoicesScreen(
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
                         text = if (activeFilter == "My Clones") {
-                            "No cloned voices yet. Tap 'Clone Voice' to record or upload a sample!"
+                            "No cloned voices yet. Tap 'Clone Voice' to record live or upload any voice/video file!"
                         } else {
                             "No voices available in this category."
                         },
@@ -287,7 +292,9 @@ fun VoicesScreen(
                         profile = profile,
                         isPlayingSample = isPlaying && playingPath != null && playingPath == profile.audioPath,
                         onUseClick = { onUseVoiceInStudio(profile.id) },
-                        onPlaySample = { profile.audioPath?.let { viewModel.playAudio(it) } },
+                        onPlaySample = {
+                            profile.audioPath?.let { viewModel.playAudio(it, useCustomSpeed = false) }
+                        },
                         onDelete = { viewModel.deleteVoiceProfile(profile.id) }
                     )
                 }
@@ -295,7 +302,7 @@ fun VoicesScreen(
         }
     }
 
-    // --- Voice Clone Studio Modal (Live Record + Audio File Upload + AI Accent Detection) ---
+    // --- Voice Clone Studio Modal (Live Record + Multi-Format File Upload + Pure Voice DNA AI) ---
     if (showCloneDialog) {
         val scripts = VoiceCatalog.cloneReadingScripts[selectedHintLanguage]
             ?: VoiceCatalog.cloneReadingScripts["English"]!!
@@ -322,13 +329,13 @@ fun VoicesScreen(
                 ) {
                     Column {
                         Text(
-                            text = "AI Voice Clone Studio",
+                            text = "Pure Voice Clone Studio",
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
                             color = CosmicWhite
                         )
                         Text(
-                            text = "Live Recording or Audio Upload + Accent AI",
+                            text = "Live Recording or Any Audio/Video Upload + Accent AI",
                             fontSize = 11.sp,
                             color = CosmicCyan
                         )
@@ -347,7 +354,7 @@ fun VoicesScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 560.dp)
+                        .heightIn(max = 580.dp)
                         .verticalScroll(rememberScrollState())
                 ) {
                     // 1. Voice Name
@@ -374,7 +381,7 @@ fun VoicesScreen(
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // 2. Spoken Language Hint (for reading scripts & AI hint)
+                    // 2. Sample Language Selector with Country Flags (All 18 Languages)
                     Text("Sample Language", color = CosmicCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -382,7 +389,7 @@ fun VoicesScreen(
                             .fillMaxWidth()
                             .padding(vertical = 6.dp)
                     ) {
-                        items(VoiceCatalog.supportedLanguages.take(8), key = { it.code }) { lang ->
+                        items(VoiceCatalog.supportedLanguages, key = { it.code }) { lang ->
                             val isSel = selectedHintLanguage == lang.displayName
                             Box(
                                 modifier = Modifier
@@ -393,10 +400,10 @@ fun VoicesScreen(
                                         selectedHintLanguage = lang.displayName
                                         selectedScriptIndex = 0
                                     }
-                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                                    .padding(horizontal = 11.dp, vertical = 6.dp)
                             ) {
                                 Text(
-                                    text = lang.displayName,
+                                    text = lang.labelWithFlag,
                                     fontSize = 11.sp,
                                     fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
                                     color = if (isSel) DeepSpaceBackground else CosmicWhite
@@ -407,7 +414,7 @@ fun VoicesScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // 3. Input Mode Switcher: Live Voice Record vs Upload Audio File
+                    // 3. Input Mode Switcher: Live Voice Record vs Upload Media File
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth()
@@ -445,7 +452,7 @@ fun VoicesScreen(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.UploadFile, contentDescription = null, tint = CosmicWhite, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Upload Audio", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CosmicWhite)
+                                Text("Upload File", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CosmicWhite)
                             }
                         }
                     }
@@ -481,6 +488,7 @@ fun VoicesScreen(
                         }
 
                         // Script Prompt Card
+                        val hintFlag = VoiceCatalog.flagForLanguage(selectedHintLanguage)
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -493,7 +501,7 @@ fun VoicesScreen(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = null, tint = CosmicCyan, modifier = Modifier.size(15.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Read aloud clearly (8–20 seconds):", fontSize = 11.sp, color = CosmicCyan, fontWeight = FontWeight.SemiBold)
+                                    Text("$hintFlag Read aloud clearly (8–20 seconds):", fontSize = 11.sp, color = CosmicCyan, fontWeight = FontWeight.SemiBold)
                                 }
                                 Spacer(modifier = Modifier.height(6.dp))
                                 Text(
@@ -507,11 +515,11 @@ fun VoicesScreen(
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // Waveform Visualizer & Record Controls
+                        // Waveform Visualizer & Capture Info
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(54.dp)
+                                .height(56.dp)
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(LiquidGlassSurface)
                                 .border(1.dp, LiquidGlassBorder, RoundedCornerShape(12.dp)),
@@ -520,20 +528,29 @@ fun VoicesScreen(
                             if (isRecording) {
                                 LiveRecordingWaveform(amplitudes = recordingAmplitudes)
                             } else if (tempSampleFile != null) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = CosmicCyan, modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = tempSampleDisplayName ?: "Sample Ready",
-                                        color = CosmicCyan,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = CosmicCyan, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(5.dp))
+                                        Text(
+                                            text = tempSampleDisplayName ?: "Sample Ready",
+                                            color = CosmicCyan,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    if (!tempSampleMeta.isNullOrBlank()) {
+                                        Text(
+                                            text = tempSampleMeta!!,
+                                            color = CosmicMutedText,
+                                            fontSize = 10.sp
+                                        )
+                                    }
                                 }
                             } else {
-                                Text("Tap the microphone to start recording", color = CosmicMutedText, fontSize = 12.sp)
+                                Text("Tap the microphone to record pure 48kHz studio sample", color = CosmicMutedText, fontSize = 11.sp)
                             }
                         }
 
@@ -541,11 +558,11 @@ fun VoicesScreen(
 
                         Text(
                             text = if (isRecording) {
-                                String.format("Recording: 00:%02d  (Tap Stop to run Accent AI)", recordingDurationSec)
+                                String.format(Locale.US, "Recording: 00:%02d  (Tap Stop to run Accent AI)", recordingDurationSec)
                             } else if (tempSampleFile != null) {
-                                "Voice captured! Preview or adjust detected profile below."
+                                "Voice captured! Preview or refine detected Voice DNA below."
                             } else {
-                                "Tip: Record in a quiet room for studio-quality cloning"
+                                "Tip: Speak naturally in a quiet spot for ultra-pure voice cloning"
                             },
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -596,7 +613,7 @@ fun VoicesScreen(
                             }
                         }
                     } else {
-                        // UPLOAD VOICE FILE MODE
+                        // MULTI-FORMAT UPLOAD FILE MODE (Audio, WhatsApp Voice Notes, Video Clips)
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -604,8 +621,8 @@ fun VoicesScreen(
                                 .background(LiquidGlassSurfaceElevated)
                                 .border(1.2.dp, LiquidBorderBrush, RoundedCornerShape(16.dp))
                                 .clickable {
-                                    audioPickerLauncher.launch(
-                                        arrayOf("audio/*", "application/ogg")
+                                    mediaPickerLauncher.launch(
+                                        arrayOf("audio/*", "video/*", "application/ogg", "application/octet-stream")
                                     )
                                 }
                                 .padding(18.dp)
@@ -625,7 +642,7 @@ fun VoicesScreen(
                                 }
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = tempSampleDisplayName ?: "Select Voice Audio File",
+                                    text = tempSampleDisplayName ?: "Upload Voice / Video File",
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = CosmicWhite,
@@ -633,18 +650,28 @@ fun VoicesScreen(
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
+                                if (!tempSampleMeta.isNullOrBlank()) {
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = tempSampleMeta!!,
+                                        fontSize = 11.sp,
+                                        color = CosmicCyan,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "Supports MP3, WAV, M4A, AAC, OGG, FLAC (max 15 MB)",
-                                    fontSize = 11.sp,
+                                    text = "MP3, WAV, M4A, OPUS, OGG, AAC, FLAC, AMR, 3GP, MP4, MOV, WebM (max 18 MB)",
+                                    fontSize = 10.sp,
                                     color = CosmicMutedText,
-                                    textAlign = TextAlign.Center
+                                    textAlign = TextAlign.Center,
+                                    lineHeight = 14.sp
                                 )
                             }
                         }
                     }
 
-                    // Preview button if we have a recorded or uploaded audio sample
+                    // Preview & Re-Scan buttons if we have a recorded or uploaded sample
                     if (!isRecording && tempSampleFile != null) {
                         Spacer(modifier = Modifier.height(10.dp))
                         Row(
@@ -671,7 +698,7 @@ fun VoicesScreen(
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = if (previewPlaying) "Playing..." else "Preview Sample",
+                                        text = if (previewPlaying) "Playing..." else "Preview (1x)",
                                         color = CosmicCyan,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold
@@ -699,7 +726,7 @@ fun VoicesScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // 4. AI Accent Detection & Acoustic Voice DNA Panel
+                    // 4. AI Accent Detection & Pure Voice DNA Panel
                     if (isAnalyzingVoice) {
                         Box(
                             modifier = Modifier
@@ -714,13 +741,13 @@ fun VoicesScreen(
                                 CircularProgressIndicator(color = CosmicCyan, strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column {
-                                    Text("AI Accent & Voice DNA Scanning...", color = CosmicCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                    Text("Analyzing timbre, regional accent, pitch & cadence", color = CosmicMutedText, fontSize = 10.sp)
+                                    Text("Pure Voice DNA & Accent Scanning...", color = CosmicCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text("Extracting vocal timbre, regional accent, pitch & cadence", color = CosmicMutedText, fontSize = 10.sp)
                                 }
                             }
                         }
                     } else if (analysisError != null) {
-                        Box(
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(12.dp))
@@ -734,6 +761,23 @@ fun VoicesScreen(
                                 fontSize = 11.sp,
                                 lineHeight = 16.sp
                             )
+                            if (analysisNeedsApiKey) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(CosmicCyan)
+                                        .clickable { viewModel.openApiKeyDialog() }
+                                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Text(
+                                        text = "Configure Gemini API Key",
+                                        color = DeepSpaceBackground,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                         }
                     } else if (voiceAnalysis != null) {
                         AccentDetectionResultCard(analysis = voiceAnalysis!!)
@@ -830,6 +874,7 @@ private fun AccentDetectionResultCard(
     analysis: VoiceAnalysisResult,
     modifier: Modifier = Modifier
 ) {
+    val langFlag = VoiceCatalog.flagForLanguage(analysis.detectedLanguage)
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -847,7 +892,7 @@ private fun AccentDetectionResultCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Psychology, contentDescription = null, tint = CosmicCyan, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("AI Accent & Voice DNA Detected", color = CosmicCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("Pure Voice DNA Detected", color = CosmicCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
                 Box(
                     modifier = Modifier
@@ -866,7 +911,7 @@ private fun AccentDetectionResultCard(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 AnalysisPill(label = "Accent", value = analysis.detectedAccent, modifier = Modifier.weight(1.3f))
-                AnalysisPill(label = "Language", value = analysis.detectedLanguage, modifier = Modifier.weight(0.9f))
+                AnalysisPill(label = "Language", value = "$langFlag ${analysis.detectedLanguage}", modifier = Modifier.weight(0.95f))
             }
 
             Spacer(modifier = Modifier.height(6.dp))
@@ -913,6 +958,7 @@ private fun CharacterVoiceCard(
     onDelete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val langFlag = VoiceCatalog.flagForLanguage(profile.language)
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -971,7 +1017,7 @@ private fun CharacterVoiceCard(
                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                             ) {
                                 Text(
-                                    text = if (!profile.isPrebuilt) "CLONE" else profile.language.uppercase(),
+                                    text = if (!profile.isPrebuilt) "$langFlag CLONE" else "$langFlag ${profile.language.uppercase()}",
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = if (!profile.isPrebuilt) CosmicCyan else CosmicWhite

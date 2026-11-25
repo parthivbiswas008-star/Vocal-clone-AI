@@ -5,9 +5,21 @@ import com.example.data.database.VoiceProfileEntity
 data class LanguageOption(
     val code: String,
     val displayName: String,
-    val shortLabel: String,
+    val flag: String,
     val regionHint: String
-)
+) {
+    val labelWithFlag: String
+        get() = "$flag $displayName"
+}
+
+data class VoiceFilterOption(
+    val key: String,
+    val label: String,
+    val flag: String
+) {
+    val labelWithFlag: String
+        get() = "$flag $label"
+}
 
 data class ScriptOption(
     val title: String,
@@ -16,27 +28,68 @@ data class ScriptOption(
 
 object VoiceCatalog {
     val supportedLanguages: List<LanguageOption> = listOf(
-        LanguageOption("en-US", "English", "English", "US / UK / Global English"),
-        LanguageOption("bn-IN", "Bengali", "Bengali", "Bengali (Bangla)"),
-        LanguageOption("hi-IN", "Hindi", "Hindi", "Hindi"),
-        LanguageOption("es-ES", "Spanish", "Spanish", "Spanish"),
-        LanguageOption("fr-FR", "French", "French", "French"),
-        LanguageOption("ar-XA", "Arabic", "Arabic", "Modern Standard Arabic"),
-        LanguageOption("de-DE", "German", "German", "German"),
-        LanguageOption("ja-JP", "Japanese", "Japanese", "Japanese"),
-        LanguageOption("pt-BR", "Portuguese", "Portuguese", "Portuguese"),
-        LanguageOption("ko-KR", "Korean", "Korean", "Korean"),
-        LanguageOption("ur-PK", "Urdu", "Urdu", "Urdu"),
-        LanguageOption("it-IT", "Italian", "Italian", "Italian")
+        LanguageOption("en-US", "English", "\uD83C\uDDFA\uD83C\uDDF8", "US / UK / Global English"),
+        LanguageOption("bn-BD", "Bengali", "\uD83C\uDDE7\uD83C\uDDE9", "Bengali (Bangla)"),
+        LanguageOption("hi-IN", "Hindi", "\uD83C\uDDEE\uD83C\uDDF3", "Hindi"),
+        LanguageOption("es-ES", "Spanish", "\uD83C\uDDEA\uD83C\uDDF8", "Spanish"),
+        LanguageOption("fr-FR", "French", "\uD83C\uDDEB\uD83C\uDDF7", "French"),
+        LanguageOption("ar-SA", "Arabic", "\uD83C\uDDF8\uD83C\uDDE6", "Modern Standard Arabic"),
+        LanguageOption("de-DE", "German", "\uD83C\uDDE9\uD83C\uDDEA", "German"),
+        LanguageOption("ja-JP", "Japanese", "\uD83C\uDDEF\uD83C\uDDF5", "Japanese"),
+        LanguageOption("pt-BR", "Portuguese", "\uD83C\uDDE7\uD83C\uDDF7", "Brazilian & European Portuguese"),
+        LanguageOption("ko-KR", "Korean", "\uD83C\uDDF0\uD83C\uDDF7", "Korean"),
+        LanguageOption("ur-PK", "Urdu", "\uD83C\uDDF5\uD83C\uDDF0", "Urdu"),
+        LanguageOption("it-IT", "Italian", "\uD83C\uDDEE\uD83C\uDDF9", "Italian"),
+        LanguageOption("ru-RU", "Russian", "\uD83C\uDDF7\uD83C\uDDFA", "Russian"),
+        LanguageOption("tr-TR", "Turkish", "\uD83C\uDDF9\uD83C\uDDF7", "Turkish"),
+        LanguageOption("zh-CN", "Chinese", "\uD83C\uDDE8\uD83C\uDDF3", "Mandarin Chinese"),
+        LanguageOption("id-ID", "Indonesian", "\uD83C\uDDEE\uD83C\uDDE9", "Indonesian"),
+        LanguageOption("vi-VN", "Vietnamese", "\uD83C\uDDFB\uD83C\uDDF3", "Vietnamese"),
+        LanguageOption("th-TH", "Thai", "\uD83C\uDDF9\uD83C\uDDED", "Thai")
     )
 
-    val voiceFilterCategories: List<String> = listOf(
-        "All",
-        "My Clones",
-        "English",
-        "Bengali",
-        "Hindi",
-        "Global"
+    fun flagForLanguage(languageName: String): String {
+        val exact = supportedLanguages.firstOrNull {
+            it.displayName.equals(languageName.trim(), ignoreCase = true)
+        }
+        if (exact != null) return exact.flag
+        return when {
+            languageName.contains("UK", true) || languageName.contains("British", true) -> "\uD83C\uDDEC\uD83C\uDDE7"
+            languageName.contains("English", true) -> "\uD83C\uDDFA\uD83C\uDDF8"
+            languageName.contains("Bengali", true) || languageName.contains("Bangla", true) -> "\uD83C\uDDE7\uD83C\uDDE9"
+            languageName.contains("Hindi", true) -> "\uD83C\uDDEE\uD83C\uDDF3"
+            languageName.contains("Spanish", true) -> "\uD83C\uDDEA\uD83C\uDDF8"
+            languageName.contains("French", true) -> "\uD83C\uDDEB\uD83C\uDDF7"
+            languageName.contains("Arabic", true) -> "\uD83C\uDDF8\uD83C\uDDE6"
+            languageName.contains("German", true) -> "\uD83C\uDDE9\uD83C\uDDEA"
+            languageName.contains("Japanese", true) -> "\uD83C\uDDEF\uD83C\uDDF5"
+            languageName.contains("Portuguese", true) -> "\uD83C\uDDE7\uD83C\uDDF7"
+            languageName.contains("Korean", true) -> "\uD83C\uDDF0\uD83C\uDDF7"
+            languageName.contains("Urdu", true) -> "\uD83C\uDDF5\uD83C\uDDF0"
+            languageName.contains("Italian", true) -> "\uD83C\uDDEE\uD83C\uDDF9"
+            languageName.contains("Russian", true) -> "\uD83C\uDDF7\uD83C\uDDFA"
+            languageName.contains("Turkish", true) -> "\uD83C\uDDF9\uD83C\uDDF7"
+            languageName.contains("Chinese", true) || languageName.contains("Mandarin", true) -> "\uD83C\uDDE8\uD83C\uDDF3"
+            languageName.contains("Indonesian", true) -> "\uD83C\uDDEE\uD83C\uDDE9"
+            languageName.contains("Vietnamese", true) -> "\uD83C\uDDFB\uD83C\uDDF3"
+            languageName.contains("Thai", true) -> "\uD83C\uDDF9\uD83C\uDDED"
+            else -> "\uD83C\uDF10"
+        }
+    }
+
+    val voiceFilterOptions: List<VoiceFilterOption> = listOf(
+        VoiceFilterOption("All", "All", "\uD83C\uDF10"),
+        VoiceFilterOption("My Clones", "My Clones", "\uD83C\uDF99\uFE0F"),
+        VoiceFilterOption("English", "English", "\uD83C\uDDFA\uD83C\uDDF8"),
+        VoiceFilterOption("Bengali", "Bengali", "\uD83C\uDDE7\uD83C\uDDE9"),
+        VoiceFilterOption("Hindi", "Hindi", "\uD83C\uDDEE\uD83C\uDDF3"),
+        VoiceFilterOption("Spanish", "Spanish", "\uD83C\uDDEA\uD83C\uDDF8"),
+        VoiceFilterOption("French", "French", "\uD83C\uDDEB\uD83C\uDDF7"),
+        VoiceFilterOption("Arabic", "Arabic", "\uD83C\uDDF8\uD83C\uDDE6"),
+        VoiceFilterOption("German", "German", "\uD83C\uDDE9\uD83C\uDDEA"),
+        VoiceFilterOption("Japanese", "Japanese", "\uD83C\uDDEF\uD83C\uDDF5"),
+        VoiceFilterOption("Urdu", "Urdu", "\uD83C\uDDF5\uD83C\uDDF0"),
+        VoiceFilterOption("More", "More", "\uD83C\uDF0D")
     )
 
     val officialGeminiVoices: Map<String, String> = mapOf(
@@ -72,8 +125,16 @@ object VoiceCatalog {
         "Zubenelgenubi" to "Male, casual, laid-back, natural"
     )
 
+    val femaleOfficialVoices: Set<String> = officialGeminiVoices
+        .filterValues { it.startsWith("Female", ignoreCase = true) }
+        .keys
+
+    val maleOfficialVoices: Set<String> = officialGeminiVoices
+        .filterValues { it.startsWith("Male", ignoreCase = true) }
+        .keys
+
     val curatedStudioVoices: List<VoiceProfileEntity> = listOf(
-        // --- ENGLISH CHARACTERS ---
+        // --- ENGLISH CHARACTERS (6) ---
         VoiceProfileEntity(
             name = "Liam Brooks",
             gender = "Male",
@@ -139,8 +200,21 @@ object VoiceCatalog {
             description = "Friendly, enthusiastic conversational host — built for YouTube intros, gaming, and tutorials.",
             voiceTraits = "Upbeat delivery, crisp consonants, friendly conversational spark"
         ),
+        VoiceProfileEntity(
+            name = "Evelyn Harper",
+            gender = "Female",
+            accent = "British Studio English",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Despina",
+            language = "English",
+            recordingLanguage = "English",
+            pitchTone = "Smooth & Calm",
+            description = "Polished British studio voice with refined calm — suited for luxury ads, meditation, and audio guides.",
+            voiceTraits = "Silky smooth projection, composed British diction, serene tone"
+        ),
 
-        // --- BENGALI CHARACTERS ---
+        // --- BENGALI CHARACTERS (6) ---
         VoiceProfileEntity(
             name = "Aarav Sen",
             gender = "Male",
@@ -193,8 +267,34 @@ object VoiceCatalog {
             description = "Serene, gentle Bengali voice — perfect for calm storytelling, meditation guides, and heartfelt letters.",
             voiceTraits = "Soft breathy serenity, unhurried soothing cadence, gentle endings"
         ),
+        VoiceProfileEntity(
+            name = "Tanvir Rahman",
+            gender = "Male",
+            accent = "Bangladeshi Broadcast Bengali",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Sadaltager",
+            language = "Bengali",
+            recordingLanguage = "Bengali",
+            pitchTone = "Balanced Presenter",
+            description = "Knowledgeable, articulate Bengali host — crafted for tech reviews, podcasts, and educational explainers.",
+            voiceTraits = "Clear Bangladeshi studio accent, balanced warmth, steady pacing"
+        ),
+        VoiceProfileEntity(
+            name = "Sraboni Mukherjee",
+            gender = "Female",
+            accent = "Expressive Kolkata Bengali",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Laomedeia",
+            language = "Bengali",
+            recordingLanguage = "Bengali",
+            pitchTone = "Lively & Cheerful",
+            description = "Vibrant, upbeat Bengali voice — tailored for lifestyle reels, brand promos, and engaging vlogs.",
+            voiceTraits = "Bright cheerful lift, expressive Kolkata inflection, energetic clarity"
+        ),
 
-        // --- HINDI CHARACTERS ---
+        // --- HINDI CHARACTERS (6) ---
         VoiceProfileEntity(
             name = "Kabir Sharma",
             gender = "Male",
@@ -247,8 +347,34 @@ object VoiceCatalog {
             description = "Polished, articulate Hindi presenter — crafted for e-learning modules, corporate narration, and assistants.",
             voiceTraits = "Crisp broadcast diction, poised intonation, balanced clarity"
         ),
+        VoiceProfileEntity(
+            name = "Arjun Verma",
+            gender = "Male",
+            accent = "Warm Storytelling Hindi",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Schedar",
+            language = "Hindi",
+            recordingLanguage = "Hindi",
+            pitchTone = "Steady & Warm",
+            description = "Composed, friendly Hindi storyteller — great for audiobooks, devotional narrations, and daily podcasts.",
+            voiceTraits = "Even mellow baritone, natural pauses, warm Indian cadence"
+        ),
+        VoiceProfileEntity(
+            name = "Nisha Patel",
+            gender = "Female",
+            accent = "Friendly Modern Hindi",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Achird",
+            language = "Hindi",
+            recordingLanguage = "Hindi",
+            pitchTone = "Warm Mid-range",
+            description = "Approachable, friendly Hindi narrator — ideal for tutorials, customer guides, and warm conversations.",
+            voiceTraits = "Friendly natural smile in tone, clear diction, smooth pacing"
+        ),
 
-        // --- GLOBAL / MULTILINGUAL CHARACTERS ---
+        // --- SPANISH CHARACTERS (2) ---
         VoiceProfileEntity(
             name = "Mateo Cruz",
             gender = "Male",
@@ -263,6 +389,21 @@ object VoiceCatalog {
             voiceTraits = "Expressive Spanish rhythm, upbeat friendly warmth, clear projection"
         ),
         VoiceProfileEntity(
+            name = "Sofia Morales",
+            gender = "Female",
+            accent = "Castilian Spanish",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Autonoe",
+            language = "Spanish",
+            recordingLanguage = "Spanish",
+            pitchTone = "Bright & Poised",
+            description = "Articulate, radiant Spanish presenter — ideal for audio courses, news summaries, and storytelling.",
+            voiceTraits = "Crisp Castilian clarity, graceful poise, bright natural timbre"
+        ),
+
+        // --- FRENCH CHARACTERS (2) ---
+        VoiceProfileEntity(
             name = "Amélie Laurent",
             gender = "Female",
             accent = "Parisian French",
@@ -275,6 +416,21 @@ object VoiceCatalog {
             description = "Refined, velvety French narrator — designed for luxury branding, cinema, and cultural essays.",
             voiceTraits = "Soft velvet texture, refined Parisian elegance, smooth legato flow"
         ),
+        VoiceProfileEntity(
+            name = "Julien Moreau",
+            gender = "Male",
+            accent = "Warm Studio French",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Enceladus",
+            language = "French",
+            recordingLanguage = "French",
+            pitchTone = "Intimate & Warm",
+            description = "Soft-spoken, cinematic French storyteller — great for short films, podcasts, and late-night narration.",
+            voiceTraits = "Intimate breathy warmth, subtle French cadence, calm resonance"
+        ),
+
+        // --- ARABIC CHARACTERS (2) ---
         VoiceProfileEntity(
             name = "Tariq Al-Mansoor",
             gender = "Male",
@@ -289,6 +445,49 @@ object VoiceCatalog {
             voiceTraits = "Resonant firm voice, classical Arabic poise, clear articulation"
         ),
         VoiceProfileEntity(
+            name = "Layla Hassan",
+            gender = "Female",
+            accent = "Melodic Modern Arabic",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Callirrhoe",
+            language = "Arabic",
+            recordingLanguage = "Arabic",
+            pitchTone = "Relaxed & Natural",
+            description = "Warm, natural Arabic narrator — suited for podcasts, cultural audiobooks, and lifestyle videos.",
+            voiceTraits = "Gentle natural rhythm, clear Arabic vowels, welcoming tone"
+        ),
+
+        // --- GERMAN CHARACTERS (2) ---
+        VoiceProfileEntity(
+            name = "Lukas Weber",
+            gender = "Male",
+            accent = "Standard Hochdeutsch",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Rasalgethi",
+            language = "German",
+            recordingLanguage = "German",
+            pitchTone = "Steady Documentary",
+            description = "Clear, analytical German narrator — built for science explainers, audiobooks, and tech videos.",
+            voiceTraits = "Steady documentary clarity, precise German consonants, calm authority"
+        ),
+        VoiceProfileEntity(
+            name = "Clara Hoffmann",
+            gender = "Female",
+            accent = "Modern Berlin German",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Pulcherrima",
+            language = "German",
+            recordingLanguage = "German",
+            pitchTone = "Confident & Dynamic",
+            description = "Forward, confident German presenter — great for business briefings, product launches, and ads.",
+            voiceTraits = "Dynamic projection, crisp articulation, confident modern tone"
+        ),
+
+        // --- JAPANESE CHARACTERS (2) ---
+        VoiceProfileEntity(
             name = "Hana Sato",
             gender = "Female",
             accent = "Tokyo Japanese",
@@ -300,6 +499,140 @@ object VoiceCatalog {
             pitchTone = "Crystal Clear",
             description = "Polite, crystal-clear Japanese voice — crafted for serene narration, product guides, and storytelling.",
             voiceTraits = "Pure gentle timbre, precise Japanese pitch accent, calm clarity"
+        ),
+        VoiceProfileEntity(
+            name = "Kenji Takahashi",
+            gender = "Male",
+            accent = "Calm Studio Japanese",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Iapetus",
+            language = "Japanese",
+            recordingLanguage = "Japanese",
+            pitchTone = "Clean & Composed",
+            description = "Composed, articulate Japanese narrator — ideal for documentaries, anime recaps, and calm explainers.",
+            voiceTraits = "Neutral studio clarity, poised Japanese rhythm, clean diction"
+        ),
+
+        // --- URDU CHARACTERS (2) ---
+        VoiceProfileEntity(
+            name = "Hamza Qureshi",
+            gender = "Male",
+            accent = "Classical Poetic Urdu",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Algieba",
+            language = "Urdu",
+            recordingLanguage = "Urdu",
+            pitchTone = "Velvet Baritone",
+            description = "Eloquent, velvety Urdu narrator — crafted for poetry, ghazals, drama, and timeless storytelling.",
+            voiceTraits = "Rich poetic resonance, refined Urdu pronunciation, smooth pacing"
+        ),
+        VoiceProfileEntity(
+            name = "Zara Siddiqui",
+            gender = "Female",
+            accent = "Graceful Studio Urdu",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Sulafat",
+            language = "Urdu",
+            recordingLanguage = "Urdu",
+            pitchTone = "Warm & Graceful",
+            description = "Graceful, melodic Urdu voice — ideal for audiobooks, heartfelt letters, and radio-style broadcasts.",
+            voiceTraits = "Warm alto timbre, soft elegant diction, expressive cadence"
+        ),
+
+        // --- MORE GLOBAL CHARACTERS (7) ---
+        VoiceProfileEntity(
+            name = "Gabriel Silva",
+            gender = "Male",
+            accent = "Brazilian Portuguese",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Umbriel",
+            language = "Portuguese",
+            recordingLanguage = "Portuguese",
+            pitchTone = "Relaxed Conversational",
+            description = "Warm, easy-going Brazilian Portuguese host — great for podcasts, lifestyle vlogs, and storytelling.",
+            voiceTraits = "Relaxed Brazilian cadence, friendly warmth, natural conversational ease"
+        ),
+        VoiceProfileEntity(
+            name = "Ji-eun Park",
+            gender = "Female",
+            accent = "Seoul Korean",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Leda",
+            language = "Korean",
+            recordingLanguage = "Korean",
+            pitchTone = "Bright & Expressive",
+            description = "Vibrant, clear Seoul Korean voice — ideal for K-culture content, shorts, and modern narration.",
+            voiceTraits = "Clean bright tone, natural Seoul inflection, friendly clarity"
+        ),
+        VoiceProfileEntity(
+            name = "Marco Rossi",
+            gender = "Male",
+            accent = "Expressive Italian",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Zubenelgenubi",
+            language = "Italian",
+            recordingLanguage = "Italian",
+            pitchTone = "Warm Casual",
+            description = "Charismatic, expressive Italian narrator — great for culinary stories, travel guides, and cinema.",
+            voiceTraits = "Melodic Italian flow, charismatic warmth, natural rhythmic emphasis"
+        ),
+        VoiceProfileEntity(
+            name = "Dmitri Volkov",
+            gender = "Male",
+            accent = "Moscow Russian",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Gacrux",
+            language = "Russian",
+            recordingLanguage = "Russian",
+            pitchTone = "Deep Grounded",
+            description = "Mature, resonant Russian voice — suited for classic literature, historical narration, and trailers.",
+            voiceTraits = "Grounded chest depth, clear Slavic articulation, steady cadence"
+        ),
+        VoiceProfileEntity(
+            name = "Elif Kaya",
+            gender = "Female",
+            accent = "Istanbul Turkish",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Aoede",
+            language = "Turkish",
+            recordingLanguage = "Turkish",
+            pitchTone = "Expressive & Clear",
+            description = "Warm, expressive Istanbul Turkish narrator — tailored for podcasts, drama narration, and social videos.",
+            voiceTraits = "Expressive Turkish melody, warm natural phrasing, clear tone"
+        ),
+        VoiceProfileEntity(
+            name = "Mei-Ling Zhou",
+            gender = "Female",
+            accent = "Standard Mandarin Chinese",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Despina",
+            language = "Chinese",
+            recordingLanguage = "Chinese",
+            pitchTone = "Polished & Calm",
+            description = "Smooth, articulate Mandarin speaker — ideal for explainers, audiobooks, and professional voiceovers.",
+            voiceTraits = "Crisp Mandarin tonal clarity, smooth studio warmth, steady rhythm"
+        ),
+        VoiceProfileEntity(
+            name = "Budi Santoso",
+            gender = "Male",
+            accent = "Jakarta Indonesian",
+            audioPath = null,
+            isPrebuilt = true,
+            prebuiltCode = "Charon",
+            language = "Indonesian",
+            recordingLanguage = "Indonesian",
+            pitchTone = "Clear & Friendly",
+            description = "Confident, friendly Indonesian narrator — great for YouTube explainers, podcasts, and tutorials.",
+            voiceTraits = "Clear Indonesian articulation, approachable studio baritone, natural pace"
         )
     )
 
@@ -367,6 +700,66 @@ object VoiceCatalog {
                 "Natural Japanese",
                 "こんにちは。私の自然な声とアクセント、話し方のリズムを正確に学習してもらうために、この文章をゆっくりと読んでいます。"
             )
+        ),
+        "Portuguese" to listOf(
+            ScriptOption(
+                "Natural Portuguese",
+                "Olá! Estou falando com a minha voz natural para que a inteligência artificial possa captar meu sotaque, tom e ritmo com clareza."
+            )
+        ),
+        "Korean" to listOf(
+            ScriptOption(
+                "Natural Korean",
+                "안녕하세요! 인공지능이 제 자연스러운 목소리와 억양, 말하는 리듬을 정확하게 분석할 수 있도록 또박또박 읽고 있습니다."
+            )
+        ),
+        "Urdu" to listOf(
+            ScriptOption(
+                "Natural Urdu",
+                "السلام علیکم! میں اپنی قدرتی آواز میں بات کر رہا ہوں تاکہ اے آئی میرے لہجے، پچ اور بولنے کے انداز کو بالکل درست طریقے سے سمجھ سکے۔"
+            )
+        ),
+        "Italian" to listOf(
+            ScriptOption(
+                "Natural Italian",
+                "Ciao! Sto parlando con la mia voce naturale così che l'intelligenza artificiale possa riconoscere il mio accento, timbro e ritmo."
+            )
+        ),
+        "Russian" to listOf(
+            ScriptOption(
+                "Natural Russian",
+                "Привет! Я говорю своим естественным голосом, чтобы искусственный интеллект точно определил мой акцент, тембр и интонацию."
+            )
+        ),
+        "Turkish" to listOf(
+            ScriptOption(
+                "Natural Turkish",
+                "Merhaba! Yapay zekânın aksanımı, ses tonumu ve konuşma ritmimi doğru bir şekilde öğrenmesi için doğal sesimle konuşuyorum."
+            )
+        ),
+        "Chinese" to listOf(
+            ScriptOption(
+                "Natural Chinese",
+                "你好！我现在正用我最自然的声音朗读这段话，让人工智能准确捕捉我的口音、音色和说话节奏。"
+            )
+        ),
+        "Indonesian" to listOf(
+            ScriptOption(
+                "Natural Indonesian",
+                "Halo! Saya berbicara dengan suara alami saya agar kecerdasan buatan dapat mengenali aksen, nada, dan ritme bicara saya dengan akurat."
+            )
+        ),
+        "Vietnamese" to listOf(
+            ScriptOption(
+                "Natural Vietnamese",
+                "Xin chào! Tôi đang nói bằng giọng tự nhiên của mình để trí tuệ nhân tạo có thể nhận diện chính xác giọng điệu và nhịp nói của tôi."
+            )
+        ),
+        "Thai" to listOf(
+            ScriptOption(
+                "Natural Thai",
+                "สวัสดีครับ ฉันกำลังพูดด้วยน้ำเสียงธรรมชาติเพื่อให้ปัญญาประดิษฐ์สามารถวิเคราะห์สำเนียงและจังหวะการพูดได้อย่างแม่นยำ"
+            )
         )
     )
 
@@ -394,6 +787,42 @@ object VoiceCatalog {
         ),
         "Arabic" to listOf(
             "أهلاً بكم جميعاً! اليوم نستمع إلى تجربة صوتية طبيعية بتقنية الذكاء الاصطناعي."
+        ),
+        "German" to listOf(
+            "Willkommen zurück! Heute erleben wir, wie modernste KI-Stimmen Geschichten lebendig machen."
+        ),
+        "Japanese" to listOf(
+            "みなさんこんにちは！今日はAI音声クローン技術の魅力をお届けします。"
+        ),
+        "Portuguese" to listOf(
+            "Olá pessoal! Hoje vamos explorar como a clonagem de voz com IA dá vida às nossas histórias."
+        ),
+        "Korean" to listOf(
+            "안녕하세요 여러분! 오늘 AI 보이스 클로닝으로 생생한 음성을 만들어 보겠습니다."
+        ),
+        "Urdu" to listOf(
+            "خوش آمدید! آج ہم مصنوعی ذہانت کی مدد سے قدرتی آواز بنانے کا تجربہ کریں گے۔"
+        ),
+        "Italian" to listOf(
+            "Benvenuti! Oggi scopriamo come la clonazione vocale rende ogni racconto più vivo."
+        ),
+        "Russian" to listOf(
+            "Добро пожаловать! Сегодня мы покажем, как ИИ-клонирование голоса оживляет истории."
+        ),
+        "Turkish" to listOf(
+            "Hoş geldiniz! Bugün yapay zekâ ses klonlamanın hikayelere nasıl hayat verdiğini keşfediyoruz."
+        ),
+        "Chinese" to listOf(
+            "欢迎回来！今天我们一起探索人工智能语音克隆如何让故事更加生动。"
+        ),
+        "Indonesian" to listOf(
+            "Selamat datang! Hari ini kita akan mencoba teknologi kloning suara AI yang sangat alami."
+        ),
+        "Vietnamese" to listOf(
+            "Chào mừng bạn! Hôm nay chúng ta sẽ khám phá công nghệ nhân bản giọng nói AI tự nhiên."
+        ),
+        "Thai" to listOf(
+            "ยินดีต้อนรับครับ วันนี้เรามาฟังพลังของการโคลนเสียงด้วยปัญญาประดิษฐ์กันครับ"
         )
     )
 }

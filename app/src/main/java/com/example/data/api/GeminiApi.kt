@@ -7,9 +7,10 @@ import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.http.Body
+import retrofit2.http.GET
+import retrofit2.http.Header
 import retrofit2.http.POST
 import retrofit2.http.Path
-import retrofit2.http.Query
 import java.util.concurrent.TimeUnit
 
 @JsonClass(generateAdapter = true)
@@ -65,16 +66,32 @@ data class GenerateContentResponse(
 
 @JsonClass(generateAdapter = true)
 data class Candidate(
-    @param:Json(name = "content") val content: Content? = null
+    @param:Json(name = "content") val content: Content? = null,
+    @param:Json(name = "finishReason") val finishReason: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class ModelsListResponse(
+    @param:Json(name = "models") val models: List<ModelInfo>? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class ModelInfo(
+    @param:Json(name = "name") val name: String? = null
 )
 
 interface GeminiApiService {
     @POST("v1beta/models/{model}:generateContent")
     suspend fun generateContent(
         @Path("model") model: String,
-        @Query("key") apiKey: String,
+        @Header("x-goog-api-key") apiKey: String,
         @Body request: GenerateContentRequest
     ): GenerateContentResponse
+
+    @GET("v1beta/models")
+    suspend fun listModels(
+        @Header("x-goog-api-key") apiKey: String
+    ): ModelsListResponse
 }
 
 object RetrofitClient {
@@ -82,10 +99,11 @@ object RetrofitClient {
 
     private val okHttpClient = OkHttpClient.Builder()
         .connectTimeout(60, TimeUnit.SECONDS)
-        .readTimeout(90, TimeUnit.SECONDS)
-        .writeTimeout(90, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
+        .writeTimeout(120, TimeUnit.SECONDS)
         .addInterceptor(HttpLoggingInterceptor().apply {
-            // BASIC avoids logging megabytes of Base64 audio strings to Logcat
+            // BASIC avoids logging megabytes of Base64 audio strings and redacts the API key header
+            redactHeader("x-goog-api-key")
             level = HttpLoggingInterceptor.Level.BASIC
         })
         .build()

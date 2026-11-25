@@ -6,11 +6,14 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.data.VoiceCatalog
 import com.example.data.database.GeneratedAudioEntity
 import com.example.data.database.VoiceDatabase
 import com.example.data.database.VoiceProfileEntity
+import com.example.data.repository.ApiKeyException
 import com.example.data.repository.VoiceAnalysisResult
 import com.example.data.repository.VoiceRepository
+import com.example.util.ApiKeyManager
 import com.example.util.AudioFileSaver
 import com.example.util.AudioPlayer
 import com.example.util.AudioRecorder
@@ -24,6 +27,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Locale
 
 class VoiceViewModel(
     application: Application,
@@ -38,9 +42,34 @@ class VoiceViewModel(
     val generatedAudios: StateFlow<List<GeneratedAudioEntity>> = repository.allGeneratedAudios
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // --- Selected Voice in Studio ---
+    // --- Selected Voice & Language in Studio ---
     private val _selectedVoiceId = MutableStateFlow<Int?>(null)
     val selectedVoiceId: StateFlow<Int?> = _selectedVoiceId
+
+    private val _selectedLanguage = MutableStateFlow("English")
+    val selectedLanguage: StateFlow<String> = _selectedLanguage
+
+    // --- API Key State ---
+    private val _hasApiKey = MutableStateFlow(repository.apiKeyManager.hasValidKey())
+    val hasApiKey: StateFlow<Boolean> = _hasApiKey
+
+    private val _isUsingCustomApiKey = MutableStateFlow(repository.apiKeyManager.isUsingCustomKey())
+    val isUsingCustomApiKey: StateFlow<Boolean> = _isUsingCustomApiKey
+
+    private val _hasBuiltInApiKey = MutableStateFlow(repository.apiKeyManager.hasBuiltInKey())
+    val hasBuiltInApiKey: StateFlow<Boolean> = _hasBuiltInApiKey
+
+    private val _maskedApiKey = MutableStateFlow(repository.apiKeyManager.getMaskedKeyPreview())
+    val maskedApiKey: StateFlow<String> = _maskedApiKey
+
+    private val _showApiKeyDialog = MutableStateFlow(false)
+    val showApiKeyDialog: StateFlow<Boolean> = _showApiKeyDialog
+
+    private val _isVerifyingApiKey = MutableStateFlow(false)
+    val isVerifyingApiKey: StateFlow<Boolean> = _isVerifyingApiKey
+
+    private val _apiKeyDialogError = MutableStateFlow<String?>(null)
+    val apiKeyDialogError: StateFlow<String?> = _apiKeyDialogError
 
     // --- Live Recording & File Upload State ---
     private val _isRecording = MutableStateFlow(false)
@@ -61,7 +90,11 @@ class VoiceViewModel(
     private val _tempSampleDisplayName = MutableStateFlow<String?>(null)
     val tempSampleDisplayName: StateFlow<String?> = _tempSampleDisplayName
 
+    private val _tempSampleMeta = MutableStateFlow<String?>(null)
+    val tempSampleMeta: StateFlow<String?> = _tempSampleMeta
+
     private var recordingJob: Job? = null
+    private var analysisJob: Job? = null
 
     // --- AI Accent & Voice DNA Analysis State ---
     private val _isAnalyzingVoice = MutableStateFlow(false)
@@ -73,6 +106,9 @@ class VoiceViewModel(
     private val _analysisError = MutableStateFlow<String?>(null)
     val analysisError: StateFlow<String?> = _analysisError
 
+    private val _analysisNeedsApiKey = MutableStateFlow(false)
+    val analysisNeedsApiKey: StateFlow<Boolean> = _analysisNeedsApiKey
+
     // --- Speech Generation State ---
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating
@@ -83,7 +119,7 @@ class VoiceViewModel(
     private val _generationSuccess = MutableStateFlow(false)
     val generationSuccess: StateFlow<Boolean> = _generationSuccess
 
-    // --- Download / Share Feedback ---
+    // --- Download / Share / Status Feedback ---
     private val _userMessage = MutableStateFlow<String?>(null)
     val userMessage: StateFlow<String?> = _userMessage
 
@@ -100,8 +136,68 @@ class VoiceViewModel(
         }
     }
 
-    fun selectVoiceProfile(profileId: Int) {
+    // --- API Key Actions ---
+    fun openApiKeyDialog() {
+        _apiKeyDialogError.value = null
+        refreshApiKeyState()
+        _showApiKeyDialog.value = true
+    }
+
+    fun dismissApiKeyDialog() {
+        _showApiKeyDialog.value = false
+        _apiKeyDialogError.value = null
+    }
+
+    fun verifyAndSaveApiKey(rawKey: String) {
+        viewModelScope.launch {
+            _isVerifyingApiKey.value = true
+            _apiKeyDialogError.value = null
+            val result = repository.verifyApiKey(rawKey)
+            result.onSuccess { cleanKey ->
+                repository.apiKeyManager.saveCustomApiKey(cleanKey)
+                refreshApiKeyState()
+                _analysisNeedsApiKey.value = false
+                _showApiKeyDialog.value = false
+                _userMessage.value = "Gemini API key verified and saved!"
+            }.onFailure { err ->
+                _apiKeyDialogError.value = err.message ?: "Could not verify this API key."
+            }
+            _isVerifyingApiKey.value = false
+        }
+    }
+
+    fun clearCustomApiKey() {
+        repository.apiKeyManager.clearCustomApiKey()
+        refreshApiKeyState()
+        _apiKeyDialogError.value = null
+        _userMessage.value = if (_hasBuiltInApiKey.value) {
+            "Custom key removed. Using built-in secret key."
+        } else {
+            "Saved API key removed."
+        }
+    }
+
+    private fun refreshApiKeyState() {
+        _hasApiKey.value = repository.apiKeyManager.hasValidKey()
+        _isUsingCustomApiKey.value = repository.apiKeyManager.isUsingCustomKey()
+        _hasBuiltInApiKey.value = repository.apiKeyManager.hasBuiltInKey()
+        _maskedApiKey.value = repository.apiKeyManager.getMaskedKeyPreview()
+    }
+
+    // --- Studio Voice & Language Selection ---
+    fun selectVoiceProfile(profileId: Int, syncLanguage: Boolean = true) {
         _selectedVoiceId.value = profileId
+        if (syncLanguage) {
+            val profile = voiceProfiles.value.firstOrNull { it.id == profileId }
+            if (profile != null && VoiceCatalog.supportedLanguages.any { it.displayName.equals(profile.language, true) }) {
+                val matched = VoiceCatalog.supportedLanguages.first { it.displayName.equals(profile.language, true) }
+                _selectedLanguage.value = matched.displayName
+            }
+        }
+    }
+
+    fun selectLanguage(language: String) {
+        _selectedLanguage.value = language
     }
 
     fun setPlaybackSpeed(speed: Float) {
@@ -115,6 +211,7 @@ class VoiceViewModel(
     // --- Live Voice Recording ---
     fun startRecording() {
         if (_isRecording.value) return
+        analysisJob?.cancel()
         audioPlayer.stop()
         clearTempSampleOnly()
 
@@ -124,6 +221,7 @@ class VoiceViewModel(
             _tempSampleFile.value = tempFile
             _tempSampleMimeType.value = "audio/mp4"
             _tempSampleDisplayName.value = "Live Microphone Recording"
+            _tempSampleMeta.value = null
             audioRecorder.start(tempFile)
             _isRecording.value = true
             _recordingDurationSec.value = 0
@@ -153,6 +251,7 @@ class VoiceViewModel(
 
     fun stopRecordingAndAnalyze(hintLanguage: String) {
         if (!_isRecording.value) return
+        val capturedSeconds = _recordingDurationSec.value
         audioRecorder.stop()
         _isRecording.value = false
         recordingJob?.cancel()
@@ -163,12 +262,20 @@ class VoiceViewModel(
             _analysisError.value = "Recorded audio is empty. Please speak clearly into the microphone."
             return
         }
+
+        val durationMs = AudioFileSaver.extractMediaDurationMs(file).takeIf { it > 0 } ?: (capturedSeconds * 1000L)
+        _tempSampleMeta.value = formatSampleMetadata(durationMs, file.length())
+
+        if (durationMs < 2000L) {
+            _userMessage.value = "Tip: Recording 8–15 seconds produces a much purer voice clone."
+        }
         analyzeCurrentSample(hintLanguage)
     }
 
-    // --- Voice File Upload ---
+    // --- Voice File Upload (Audio & Video Clips) ---
     fun importUploadedAudio(uri: Uri, hintLanguage: String) {
         audioPlayer.stop()
+        analysisJob?.cancel()
         if (_isRecording.value) {
             audioRecorder.stop()
             _isRecording.value = false
@@ -176,9 +283,10 @@ class VoiceViewModel(
             recordingJob = null
         }
 
-        viewModelScope.launch {
+        analysisJob = viewModelScope.launch {
             _isAnalyzingVoice.value = true
             _analysisError.value = null
+            _analysisNeedsApiKey.value = false
             _voiceAnalysis.value = null
 
             val importResult = AudioFileSaver.importAudioFromUri(getApplication(), uri)
@@ -187,10 +295,11 @@ class VoiceViewModel(
                 _tempSampleFile.value = imported.file
                 _tempSampleMimeType.value = imported.mimeType
                 _tempSampleDisplayName.value = imported.displayName
-                analyzeCurrentSample(hintLanguage)
+                _tempSampleMeta.value = formatSampleMetadata(imported.durationMs, imported.sizeBytes)
+                runSampleAnalysisInternal(imported.file, imported.mimeType, hintLanguage)
             }.onFailure { err ->
                 _isAnalyzingVoice.value = false
-                _analysisError.value = err.message ?: "Failed to load audio file."
+                _analysisError.value = err.message ?: "Failed to load selected file."
             }
         }
     }
@@ -198,17 +307,27 @@ class VoiceViewModel(
     fun analyzeCurrentSample(hintLanguage: String) {
         val file = _tempSampleFile.value ?: return
         val mime = _tempSampleMimeType.value
-        viewModelScope.launch {
-            _isAnalyzingVoice.value = true
-            _analysisError.value = null
-            try {
-                val result = repository.analyzeVoiceSample(file, mime, hintLanguage)
-                _voiceAnalysis.value = result
-            } catch (e: Exception) {
-                _analysisError.value = e.message ?: "AI voice analysis failed."
-            } finally {
-                _isAnalyzingVoice.value = false
-            }
+        analysisJob?.cancel()
+        analysisJob = viewModelScope.launch {
+            runSampleAnalysisInternal(file, mime, hintLanguage)
+        }
+    }
+
+    private suspend fun runSampleAnalysisInternal(file: File, mime: String, hintLanguage: String) {
+        _isAnalyzingVoice.value = true
+        _analysisError.value = null
+        _analysisNeedsApiKey.value = false
+        try {
+            val result = repository.analyzeVoiceSample(file, mime, hintLanguage)
+            _voiceAnalysis.value = result
+        } catch (e: ApiKeyException) {
+            _analysisNeedsApiKey.value = true
+            _analysisError.value = e.message
+            openApiKeyDialog()
+        } catch (e: Exception) {
+            _analysisError.value = e.message ?: "AI voice analysis failed."
+        } finally {
+            _isAnalyzingVoice.value = false
         }
     }
 
@@ -229,7 +348,7 @@ class VoiceViewModel(
 
         val tempFile = _tempSampleFile.value
         if (tempFile == null || !tempFile.exists() || tempFile.length() == 0L) {
-            _analysisError.value = "Please record your voice or upload an audio file first."
+            _analysisError.value = "Please record your voice or upload an audio/video file first."
             return
         }
 
@@ -282,10 +401,15 @@ class VoiceViewModel(
 
                 val newId = repository.insertVoiceProfile(profile).toInt()
                 _selectedVoiceId.value = newId
+                if (VoiceCatalog.supportedLanguages.any { it.displayName.equals(resolvedLanguage, true) }) {
+                    _selectedLanguage.value = resolvedLanguage
+                }
                 _tempSampleFile.value = null
                 _tempSampleDisplayName.value = null
+                _tempSampleMeta.value = null
                 _voiceAnalysis.value = null
                 _analysisError.value = null
+                _analysisNeedsApiKey.value = false
                 _recordingAmplitudes.value = emptyList()
                 _recordingDurationSec.value = 0
                 onComplete(newId)
@@ -296,6 +420,8 @@ class VoiceViewModel(
     }
 
     fun cancelCloningSession() {
+        analysisJob?.cancel()
+        analysisJob = null
         if (_isRecording.value) {
             audioRecorder.stop()
             _isRecording.value = false
@@ -304,6 +430,7 @@ class VoiceViewModel(
         }
         audioPlayer.stop()
         clearTempSampleOnly()
+        _isAnalyzingVoice.value = false
         _recordingAmplitudes.value = emptyList()
         _recordingDurationSec.value = 0
     }
@@ -314,14 +441,17 @@ class VoiceViewModel(
         }
         _tempSampleFile.value = null
         _tempSampleDisplayName.value = null
+        _tempSampleMeta.value = null
         _voiceAnalysis.value = null
         _analysisError.value = null
+        _analysisNeedsApiKey.value = false
     }
 
     fun playPreviewSample() {
         _tempSampleFile.value?.let { file ->
             if (file.exists()) {
-                audioPlayer.play(file.absolutePath)
+                // Play raw sample at authentic 1.0x so user hears true recording quality
+                audioPlayer.play(file.absolutePath, useCustomSpeed = false)
             }
         }
     }
@@ -338,6 +468,12 @@ class VoiceViewModel(
             return
         }
 
+        if (!repository.apiKeyManager.hasValidKey()) {
+            openApiKeyDialog()
+            _generationError.value = "Please add your Gemini API key to generate speech."
+            return
+        }
+
         viewModelScope.launch {
             _isGenerating.value = true
             _generationError.value = null
@@ -345,8 +481,10 @@ class VoiceViewModel(
             try {
                 val created = repository.generateSpeech(title, text, voiceProfile, language)
                 _generationSuccess.value = true
-                // Play immediately at the user's selected consistent playback speed
-                audioPlayer.play(created.audioPath)
+                audioPlayer.play(created.audioPath, useCustomSpeed = true)
+            } catch (e: ApiKeyException) {
+                _generationError.value = e.message
+                openApiKeyDialog()
             } catch (e: Exception) {
                 _generationError.value = e.message ?: "Speech generation failed."
             } finally {
@@ -377,8 +515,8 @@ class VoiceViewModel(
     }
 
     // --- Audio Playback ---
-    fun playAudio(path: String) {
-        audioPlayer.play(path)
+    fun playAudio(path: String, useCustomSpeed: Boolean = true) {
+        audioPlayer.play(path, useCustomSpeed = useCustomSpeed)
     }
 
     fun stopAudio() {
@@ -391,6 +529,8 @@ class VoiceViewModel(
 
     override fun onCleared() {
         super.onCleared()
+        analysisJob?.cancel()
+        recordingJob?.cancel()
         audioPlayer.stop()
         if (_isRecording.value) {
             audioRecorder.stop()
@@ -403,13 +543,34 @@ class VoiceViewModel(
             if (_selectedVoiceId.value == id) {
                 _selectedVoiceId.value = null
             }
-            repository.deleteVoiceProfile(id)
+            val deletedPath = repository.deleteVoiceProfile(id)
+            if (deletedPath != null && playingPath.value == deletedPath) {
+                audioPlayer.stop()
+            }
         }
     }
 
     fun deleteGeneratedAudio(id: Int) {
         viewModelScope.launch {
-            repository.deleteGeneratedAudio(id)
+            val deletedPath = repository.deleteGeneratedAudio(id)
+            if (deletedPath != null && playingPath.value == deletedPath) {
+                audioPlayer.stop()
+            }
+        }
+    }
+
+    private fun formatSampleMetadata(durationMs: Long, sizeBytes: Long): String {
+        val sizeStr = when {
+            sizeBytes >= 1024 * 1024 -> String.format(Locale.US, "%.1f MB", sizeBytes / (1024f * 1024f))
+            sizeBytes >= 1024 -> "${sizeBytes / 1024} KB"
+            else -> "$sizeBytes B"
+        }
+        return if (durationMs > 0) {
+            val totalSec = (durationMs / 1000).toInt()
+            val durStr = String.format(Locale.US, "%02d:%02d", totalSec / 60, totalSec % 60)
+            "$durStr • $sizeStr"
+        } else {
+            sizeStr
         }
     }
 
@@ -417,7 +578,8 @@ class VoiceViewModel(
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(VoiceViewModel::class.java)) {
                 val db = VoiceDatabase.getDatabase(application)
-                val repository = VoiceRepository(application, db.voiceDao())
+                val apiKeyManager = ApiKeyManager(application)
+                val repository = VoiceRepository(application, db.voiceDao(), apiKeyManager)
                 val recorder = AudioRecorder(application)
                 val player = AudioPlayer(application)
                 @Suppress("UNCHECKED_CAST")

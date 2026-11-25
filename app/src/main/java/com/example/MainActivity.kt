@@ -28,6 +28,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ui.components.ApiKeySetupDialog
 import com.example.ui.screens.HistoryScreen
 import com.example.ui.screens.TtsScreen
 import com.example.ui.screens.VoicesScreen
@@ -51,6 +53,14 @@ class MainActivity : ComponentActivity() {
         setContent {
             MyApplicationTheme {
                 var currentTab by remember { mutableStateOf(AppTab.TTS) }
+
+                val showApiKeyDialog by viewModel.showApiKeyDialog.collectAsStateWithLifecycle()
+                val hasApiKey by viewModel.hasApiKey.collectAsStateWithLifecycle()
+                val isUsingCustomApiKey by viewModel.isUsingCustomApiKey.collectAsStateWithLifecycle()
+                val hasBuiltInApiKey by viewModel.hasBuiltInApiKey.collectAsStateWithLifecycle()
+                val maskedApiKey by viewModel.maskedApiKey.collectAsStateWithLifecycle()
+                val isVerifyingApiKey by viewModel.isVerifyingApiKey.collectAsStateWithLifecycle()
+                val apiKeyDialogError by viewModel.apiKeyDialogError.collectAsStateWithLifecycle()
 
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
@@ -113,7 +123,7 @@ class MainActivity : ComponentActivity() {
                             AppTab.VOICES -> VoicesScreen(
                                 viewModel = viewModel,
                                 onUseVoiceInStudio = { profileId ->
-                                    viewModel.selectVoiceProfile(profileId)
+                                    viewModel.selectVoiceProfile(profileId, syncLanguage = true)
                                     currentTab = AppTab.TTS
                                 }
                             )
@@ -122,6 +132,20 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     }
+                }
+
+                if (showApiKeyDialog) {
+                    ApiKeySetupDialog(
+                        hasActiveKey = hasApiKey,
+                        isUsingCustomKey = isUsingCustomApiKey,
+                        hasBuiltInKey = hasBuiltInApiKey,
+                        maskedKeyPreview = maskedApiKey,
+                        isVerifying = isVerifyingApiKey,
+                        errorMessage = apiKeyDialogError,
+                        onVerifyAndSave = { key -> viewModel.verifyAndSaveApiKey(key) },
+                        onClearCustomKey = { viewModel.clearCustomApiKey() },
+                        onDismiss = { viewModel.dismissApiKeyDialog() }
+                    )
                 }
             }
         }
