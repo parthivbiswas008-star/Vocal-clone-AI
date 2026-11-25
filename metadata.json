@@ -1,0 +1,6 @@
+{
+  "name": "AI Voice Clone Maker",
+  "description": "একটি সম্পূর্ণ ফ্রি এআই ভয়েস ক্লোন মেকার অ্যাপ। আপনার ভয়েস ক্লোন করুন এবং যেকোনো টেক্সটকে সেই ভয়েসে রূপান্তর করুন।",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
