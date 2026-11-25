@@ -79,16 +79,22 @@ fun VoicesScreen(
     val analysisError by viewModel.analysisError.collectAsStateWithLifecycle()
     val analysisNeedsApiKey by viewModel.analysisNeedsApiKey.collectAsStateWithLifecycle()
 
+    // Live A/B Clone Audition states
+    val isAuditioningClone by viewModel.isAuditioningClone.collectAsStateWithLifecycle()
+    val auditionAudioFile by viewModel.auditionAudioFile.collectAsStateWithLifecycle()
+    val auditionError by viewModel.auditionError.collectAsStateWithLifecycle()
+
     // Audio preview player states
     val isPlaying by viewModel.isPlaying.collectAsStateWithLifecycle()
     val playingPath by viewModel.playingPath.collectAsStateWithLifecycle()
 
-    // Filter state
+    // Filter & Search state
     var activeFilter by remember { mutableStateOf("All") }
+    var searchQuery by remember { mutableStateOf("") }
 
-    val filteredVoices by remember(voiceProfiles, activeFilter) {
+    val filteredVoices by remember(voiceProfiles, activeFilter, searchQuery) {
         derivedStateOf {
-            when (activeFilter) {
+            val byCategory = when (activeFilter) {
                 "All" -> voiceProfiles
                 "My Clones" -> voiceProfiles.filter { !it.isPrebuilt }
                 "More" -> voiceProfiles.filter {
@@ -97,6 +103,19 @@ fun VoicesScreen(
                     }
                 }
                 else -> voiceProfiles.filter { it.language.equals(activeFilter, ignoreCase = true) }
+            }
+            val q = searchQuery.trim()
+            if (q.isEmpty()) {
+                byCategory
+            } else {
+                byCategory.filter { p ->
+                    p.name.contains(q, ignoreCase = true) ||
+                        p.language.contains(q, ignoreCase = true) ||
+                        p.accent.contains(q, ignoreCase = true) ||
+                        (p.detectedAccent?.contains(q, ignoreCase = true) == true) ||
+                        p.gender.contains(q, ignoreCase = true) ||
+                        p.description.contains(q, ignoreCase = true)
+                }
             }
         }
     }
@@ -110,12 +129,18 @@ fun VoicesScreen(
     var customAccentOverride by remember { mutableStateOf("") }
     var customDescription by remember { mutableStateOf("") }
     var selectedScriptIndex by remember { mutableStateOf(0) }
+    var selectedBaseVoice by remember { mutableStateOf("") }
+    var pitchCalibration by remember { mutableStateOf(1.0f) }
+    var selectedEqProfile by remember { mutableStateOf("warm") }
 
-    // Keep accent & gender auto-populated when AI Accent Detection finishes
+    // Keep accent, gender, base match, pitch & EQ auto-populated when AI Voice DNA finishes
     LaunchedEffect(voiceAnalysis) {
         voiceAnalysis?.let { result ->
             customAccentOverride = result.detectedAccent
             selectedGender = result.detectedGender
+            selectedBaseVoice = result.bestMatchingPrebuiltVoice
+            pitchCalibration = result.recommendedPitchShift.coerceIn(0.90f, 1.10f)
+            selectedEqProfile = result.eqProfile.ifBlank { "warm" }
         }
     }
 
@@ -205,6 +230,9 @@ fun VoicesScreen(
                         customAccentOverride = ""
                         customDescription = ""
                         selectedScriptIndex = 0
+                        selectedBaseVoice = ""
+                        pitchCalibration = 1.0f
+                        selectedEqProfile = "warm"
                         cloneInputMode = CloneInputMode.LIVE_RECORD
                         showCloneDialog = true
                     }
@@ -219,7 +247,45 @@ fun VoicesScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Quick Search Bar for Voices & Clones
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = {
+                Text(
+                    text = "Search voices by name, language, or accent...",
+                    color = CosmicMutedText,
+                    fontSize = 12.sp
+                )
+            },
+            leadingIcon = {
+                Icon(Icons.Default.Search, contentDescription = "Search Voices", tint = CosmicCyan, modifier = Modifier.size(18.dp))
+            },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(Icons.Default.Clear, contentDescription = "Clear Search", tint = CosmicMutedText, modifier = Modifier.size(16.dp))
+                    }
+                }
+            },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = CosmicWhite,
+                unfocusedTextColor = CosmicWhite,
+                focusedBorderColor = CosmicCyan,
+                unfocusedBorderColor = LiquidGlassBorder,
+                focusedContainerColor = LiquidGlassSurface,
+                unfocusedContainerColor = LiquidGlassSurface
+            ),
+            singleLine = true,
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("voice_search_input")
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
 
         // Category Filter Chips with Country Flags
         LazyRow(
@@ -269,10 +335,10 @@ fun VoicesScreen(
                     )
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = if (activeFilter == "My Clones") {
-                            "No cloned voices yet. Tap 'Clone Voice' to record live or upload any voice/video file!"
-                        } else {
-                            "No voices available in this category."
+                        text = when {
+                            searchQuery.isNotBlank() -> "No voices matched \"$searchQuery\". Try another name, language, or accent."
+                            activeFilter == "My Clones" -> "No cloned voices yet. Tap 'Clone Voice' to record live or upload any voice/video file!"
+                            else -> "No voices available in this category."
                         },
                         color = CosmicMutedText,
                         fontSize = 13.sp,
@@ -556,13 +622,41 @@ fun VoicesScreen(
 
                         Spacer(modifier = Modifier.height(8.dp))
 
+                        if (isRecording) {
+                            val recentAvg = recordingAmplitudes.takeLast(8).let { list ->
+                                if (list.isEmpty()) 0 else list.sum() / list.size
+                            }
+                            val (signalLabel, signalColor) = when {
+                                recordingDurationSec >= 8 && recentAvg >= 1200 -> "Studio Optimal (8s+) ✓" to CosmicCyan
+                                recentAvg >= 1200 -> "Clear Voice Signal • Keep speaking (${8 - recordingDurationSec.coerceAtMost(8)}s to optimal)" to CosmicCyan
+                                else -> "Low Mic Level • Speak a little closer" to Color(0xFFFFB74D)
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(signalColor.copy(alpha = 0.14f))
+                                    .border(0.8.dp, signalColor.copy(alpha = 0.55f), RoundedCornerShape(10.dp))
+                                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = signalLabel,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = signalColor
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                        }
+
                         Text(
                             text = if (isRecording) {
-                                String.format(Locale.US, "Recording: 00:%02d  (Tap Stop to run Accent AI)", recordingDurationSec)
+                                String.format(Locale.US, "Recording: 00:%02d  (Tap Stop to run Voice DNA AI)", recordingDurationSec)
                             } else if (tempSampleFile != null) {
-                                "Voice captured! Preview or refine detected Voice DNA below."
+                                "Voice captured! Calibrate pitch, EQ & test your clone below."
                             } else {
-                                "Tip: Speak naturally in a quiet spot for ultra-pure voice cloning"
+                                "Tip: Speak naturally for 10–15 seconds in a quiet spot for closest voice match"
                             },
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -780,7 +874,38 @@ fun VoicesScreen(
                             }
                         }
                     } else if (voiceAnalysis != null) {
-                        AccentDetectionResultCard(analysis = voiceAnalysis!!)
+                        val analysis = voiceAnalysis!!
+                        AccentDetectionResultCard(analysis = analysis)
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // 4B. Clone Calibration & Live A/B Audition Panel
+                        CloneCalibrationPanel(
+                            analysis = analysis,
+                            selectedBaseVoice = selectedBaseVoice.ifBlank { analysis.bestMatchingPrebuiltVoice },
+                            onSelectBaseVoice = { selectedBaseVoice = it },
+                            pitchCalibration = pitchCalibration,
+                            onPitchChange = { pitchCalibration = it },
+                            onResetPitch = { pitchCalibration = analysis.recommendedPitchShift.coerceIn(0.90f, 1.10f) },
+                            selectedEqProfile = selectedEqProfile,
+                            onSelectEqProfile = { selectedEqProfile = it },
+                            isAuditioning = isAuditioningClone,
+                            hasAuditionClip = auditionAudioFile != null,
+                            isPlayingAudition = isPlaying && auditionAudioFile != null && playingPath == auditionAudioFile?.absolutePath,
+                            auditionError = auditionError,
+                            onRunAudition = {
+                                viewModel.runCloneAudition(
+                                    chosenBaseVoice = selectedBaseVoice.ifBlank { analysis.bestMatchingPrebuiltVoice },
+                                    customAccent = customAccentOverride,
+                                    eqProfile = selectedEqProfile,
+                                    pitchCalibration = pitchCalibration,
+                                    hintLanguage = selectedHintLanguage
+                                )
+                            },
+                            onPlayAudition = {
+                                viewModel.playAuditionClip(pitchCalibration)
+                            }
+                        )
                     }
 
                     // Editable Detected Accent & Optional Bio
@@ -829,14 +954,24 @@ fun VoicesScreen(
 
                         Spacer(modifier = Modifier.height(14.dp))
 
+                        val canSaveClone = !isAnalyzingVoice && !isAuditioningClone && voiceAnalysis != null
                         // Save Voice Clone Button
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(48.dp)
                                 .clip(RoundedCornerShape(14.dp))
-                                .background(if (isAnalyzingVoice) SolidColor(LiquidGlassSurfaceElevated) else LiquidActiveButtonBrush)
-                                .clickable(enabled = !isAnalyzingVoice) {
+                                .background(if (canSaveClone) LiquidActiveButtonBrush else SolidColor(LiquidGlassSurfaceElevated))
+                                .border(
+                                    1.dp,
+                                    if (canSaveClone) CosmicCyan else LiquidGlassBorder,
+                                    RoundedCornerShape(14.dp)
+                                )
+                                .clickable(enabled = !isAnalyzingVoice && !isAuditioningClone) {
+                                    if (voiceAnalysis == null) {
+                                        Toast.makeText(context, "Tap 'Re-Scan AI' first so Voice DNA analysis succeeds before saving.", Toast.LENGTH_LONG).show()
+                                        return@clickable
+                                    }
                                     if (newVoiceName.isBlank()) {
                                         Toast.makeText(context, "Please enter a name for your cloned voice.", Toast.LENGTH_SHORT).show()
                                         return@clickable
@@ -846,10 +981,13 @@ fun VoicesScreen(
                                         fallbackGender = selectedGender,
                                         customAccentOverride = customAccentOverride,
                                         hintLanguage = selectedHintLanguage,
-                                        customDescription = customDescription
+                                        customDescription = customDescription,
+                                        selectedBaseVoiceOverride = selectedBaseVoice.takeIf { it.isNotBlank() },
+                                        pitchCalibration = pitchCalibration,
+                                        eqProfile = selectedEqProfile
                                     ) { newId ->
                                         showCloneDialog = false
-                                        Toast.makeText(context, "Voice clone created and selected!", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Voice clone calibrated and selected!", Toast.LENGTH_SHORT).show()
                                         onUseVoiceInStudio(newId)
                                     }
                                 }
@@ -857,9 +995,19 @@ fun VoicesScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Check, contentDescription = null, tint = DeepSpaceBackground, modifier = Modifier.size(18.dp))
+                                Icon(
+                                    imageVector = if (canSaveClone) Icons.Default.Check else Icons.Default.HourglassTop,
+                                    contentDescription = null,
+                                    tint = if (canSaveClone) DeepSpaceBackground else CosmicMutedText,
+                                    modifier = Modifier.size(18.dp)
+                                )
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Save & Use Cloned Voice", color = DeepSpaceBackground, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text(
+                                    text = if (canSaveClone) "Save & Use Calibrated Clone" else "Complete AI Voice Scan First",
+                                    color = if (canSaveClone) DeepSpaceBackground else CosmicMutedText,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
                             }
                         }
                     }
@@ -932,6 +1080,304 @@ private fun AccentDetectionResultCard(
                 fontSize = 11.sp,
                 lineHeight = 16.sp
             )
+
+            if (analysis.phoneticNotes.isNotBlank()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Pronunciation DNA: ${analysis.phoneticNotes}",
+                    color = CosmicCyan.copy(alpha = 0.9f),
+                    fontSize = 10.sp,
+                    lineHeight = 14.sp
+                )
+            }
+
+            if (analysis.sampleQualityNote.isNotBlank()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(LiquidGlassSurface)
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Icon(Icons.Default.GraphicEq, contentDescription = null, tint = CosmicViolet, modifier = Modifier.size(13.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text(
+                        text = analysis.sampleQualityNote,
+                        color = CosmicMutedText,
+                        fontSize = 10.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CloneCalibrationPanel(
+    analysis: VoiceAnalysisResult,
+    selectedBaseVoice: String,
+    onSelectBaseVoice: (String) -> Unit,
+    pitchCalibration: Float,
+    onPitchChange: (Float) -> Unit,
+    onResetPitch: () -> Unit,
+    selectedEqProfile: String,
+    onSelectEqProfile: (String) -> Unit,
+    isAuditioning: Boolean,
+    hasAuditionClip: Boolean,
+    isPlayingAudition: Boolean,
+    auditionError: String?,
+    onRunAudition: () -> Unit,
+    onPlayAudition: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val pitchPercent = kotlin.math.round((pitchCalibration - 1.0f) * 100f).toInt()
+    val pitchLabel = when {
+        pitchPercent > 0 -> "+${pitchPercent}%"
+        pitchPercent < 0 -> "${pitchPercent}%"
+        else -> "0% (Natural)"
+    }
+    val baseChoices = remember(analysis.bestMatchingPrebuiltVoice, analysis.secondaryMatchingPrebuiltVoice) {
+        listOf(
+            "Match #1" to analysis.bestMatchingPrebuiltVoice,
+            "Match #2" to analysis.secondaryMatchingPrebuiltVoice
+        ).distinctBy { it.second }
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(LiquidGlassSurfaceElevated)
+            .border(1.dp, CosmicViolet.copy(alpha = 0.55f), RoundedCornerShape(16.dp))
+            .padding(12.dp)
+    ) {
+        Column {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Tune, contentDescription = null, tint = CosmicCyan, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Fine-Tune & A/B Test Clone",
+                        color = CosmicWhite,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Text(
+                    text = "Before Saving",
+                    color = CosmicCyan,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // 1. Base Voice Match #1 vs #2
+            Text(
+                text = "Closest Voice Match (${analysis.detectedGender})",
+                color = CosmicMutedText,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(5.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                baseChoices.forEach { (rank, voiceCode) ->
+                    val isSelected = selectedBaseVoice.equals(voiceCode, ignoreCase = true)
+                    val timbreHint = VoiceCatalog.officialGeminiVoices[voiceCode]
+                        ?.substringAfter(", ")
+                        ?: "Matched timbre"
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (isSelected) CosmicCyan.copy(alpha = 0.16f) else LiquidGlassSurface)
+                            .border(
+                                1.dp,
+                                if (isSelected) CosmicCyan else LiquidGlassBorder,
+                                RoundedCornerShape(12.dp)
+                            )
+                            .clickable { onSelectBaseVoice(voiceCode) }
+                            .padding(horizontal = 10.dp, vertical = 7.dp)
+                            .testTag("base_match_${voiceCode.lowercase()}")
+                    ) {
+                        Text(
+                            text = "$rank • $voiceCode",
+                            color = if (isSelected) CosmicCyan else CosmicWhite,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = timbreHint,
+                            color = CosmicMutedText,
+                            fontSize = 9.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // 2. Pitch Fine-Tune Slider
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "Pitch Match: $pitchLabel",
+                    color = CosmicWhite,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "Reset AI",
+                    color = CosmicCyan,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onResetPitch() }
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
+            Slider(
+                value = pitchCalibration,
+                onValueChange = { onPitchChange(it.coerceIn(0.90f, 1.10f)) },
+                valueRange = 0.90f..1.10f,
+                colors = SliderDefaults.colors(
+                    thumbColor = CosmicCyan,
+                    activeTrackColor = CosmicCyan,
+                    inactiveTrackColor = LiquidGlassBorder
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(32.dp)
+                    .testTag("clone_pitch_slider")
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // 3. Vocal Tone EQ Chips
+            Text(
+                text = "Studio Vocal Tone EQ",
+                color = CosmicMutedText,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(5.dp))
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                items(VoiceCatalog.eqToneOptions, key = { it.first }) { (eqKey, eqLabel) ->
+                    val isSel = selectedEqProfile.equals(eqKey, ignoreCase = true)
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (isSel) CosmicViolet else LiquidGlassSurface)
+                            .border(1.dp, if (isSel) CosmicCyan else LiquidGlassBorder, RoundedCornerShape(10.dp))
+                            .clickable { onSelectEqProfile(eqKey) }
+                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                            .testTag("eq_chip_$eqKey")
+                    ) {
+                        Text(
+                            text = eqLabel,
+                            color = if (isSel) CosmicWhite else CosmicMutedText,
+                            fontSize = 10.sp,
+                            fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // 4. Instant A/B Clone Audition Buttons
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .weight(1.2f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (isAuditioning) LiquidGlassSurface else CosmicViolet.copy(alpha = 0.85f))
+                        .border(1.dp, CosmicCyan.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+                        .clickable(enabled = !isAuditioning) { onRunAudition() }
+                        .padding(vertical = 9.dp)
+                        .testTag("test_clone_match_button"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isAuditioning) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(color = CosmicCyan, strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Testing...", color = CosmicCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Hearing, contentDescription = "Test Clone Match", tint = CosmicWhite, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text("Test Clone Match", color = CosmicWhite, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                if (hasAuditionClip) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (isPlayingAudition) CosmicCyan else CosmicCyan.copy(alpha = 0.16f))
+                            .border(1.dp, CosmicCyan, RoundedCornerShape(12.dp))
+                            .clickable { onPlayAudition() }
+                            .padding(vertical = 9.dp)
+                            .testTag("play_audition_clip_button"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = if (isPlayingAudition) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = "Play Cloned Test",
+                                tint = if (isPlayingAudition) DeepSpaceBackground else CosmicCyan,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (isPlayingAudition) "Playing..." else "Play Clone",
+                                color = if (isPlayingAudition) DeepSpaceBackground else CosmicCyan,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (!auditionError.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = auditionError,
+                    color = SignalRed,
+                    fontSize = 10.sp,
+                    lineHeight = 14.sp
+                )
+            }
         }
     }
 }
@@ -1027,8 +1473,17 @@ private fun CharacterVoiceCard(
 
                         Spacer(modifier = Modifier.height(2.dp))
 
+                        val cloneCal = if (!profile.isPrebuilt) {
+                            val pct = kotlin.math.round((profile.pitchCalibration - 1.0f) * 100f).toInt()
+                            val pctStr = when {
+                                pct > 0 -> "+${pct}%"
+                                pct < 0 -> "${pct}%"
+                                else -> "0%"
+                            }
+                            " • ${profile.eqProfile.replaceFirstChar { it.uppercase() }} ($pctStr)"
+                        } else ""
                         Text(
-                            text = "${profile.gender} • ${profile.detectedAccent ?: profile.accent} • ${profile.pitchTone}",
+                            text = "${profile.gender} • ${profile.detectedAccent ?: profile.accent} • ${profile.pitchTone}$cloneCal",
                             fontSize = 11.sp,
                             color = CosmicCyan,
                             maxLines = 1,

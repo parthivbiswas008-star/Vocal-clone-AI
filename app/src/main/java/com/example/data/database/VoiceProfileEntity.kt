@@ -23,5 +23,9 @@ data class VoiceProfileEntity(
     val speakingCadence: String = "",
     val confidenceScore: Int = 0,
     val audioMimeType: String = "audio/mp4",
+    val pitchCalibration: Float = 1.0f,
+    val eqProfile: String = "warm",
+    val phoneticNotes: String = "",
+    val secondaryPrebuiltCode: String? = null,
     val createdAt: Long = System.currentTimeMillis()
 )

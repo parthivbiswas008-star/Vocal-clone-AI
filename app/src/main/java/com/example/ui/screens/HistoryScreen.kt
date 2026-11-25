@@ -198,7 +198,13 @@ fun HistoryScreen(
                         playPosition = if (playingPath == audio.audioPath) playPosition else 0,
                         playDuration = if (playingPath == audio.audioPath) playDuration else audio.durationMs.toInt(),
                         playbackSpeed = playbackSpeed,
-                        onPlayClick = { viewModel.playAudio(audio.audioPath) },
+                        onPlayClick = {
+                            viewModel.playAudio(
+                                path = audio.audioPath,
+                                useCustomSpeed = true,
+                                pitchCalibration = audio.pitchCalibration
+                            )
+                        },
                         onSeek = { viewModel.seekAudio(it) },
                         onDownloadClick = { viewModel.downloadAudio(audio) },
                         onShareClick = {
@@ -284,13 +290,36 @@ fun LiquidGlassHistoryItem(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        Text(
-                            text = "${audio.voiceProfileName} • $langFlag ${audio.language}",
-                            fontSize = 11.sp,
-                            color = CosmicCyan,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "${audio.voiceProfileName} • $langFlag ${audio.language}",
+                                fontSize = 11.sp,
+                                color = CosmicCyan,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            if (audio.emotionStyle.isNotBlank()) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(CosmicViolet.copy(alpha = 0.28f))
+                                        .padding(horizontal = 6.dp, vertical = 1.dp)
+                                ) {
+                                    Text(
+                                        text = audio.emotionStyle,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = CosmicWhite,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
                         Text(
                             text = if (audio.durationMs > 0) {
                                 "$dateStr • ${formatAudioTime(audio.durationMs.toInt())}"

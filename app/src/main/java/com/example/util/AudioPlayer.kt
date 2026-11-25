@@ -12,6 +12,7 @@ import java.io.File
 class AudioPlayer(private val context: Context) {
     private var mediaPlayer: MediaPlayer? = null
     private var currentUseCustomSpeed: Boolean = true
+    private var currentPitchCalibration: Float = 1.0f
 
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying
@@ -40,7 +41,7 @@ class AudioPlayer(private val context: Context) {
                 val wasPlaying = player.isPlaying
                 val params = player.playbackParams
                 params.speed = clamped
-                params.pitch = 1.0f
+                params.pitch = currentPitchCalibration.coerceIn(0.84f, 1.16f)
                 player.playbackParams = params
                 if (!wasPlaying && player.isPlaying) {
                     player.pause()
@@ -54,12 +55,15 @@ class AudioPlayer(private val context: Context) {
     fun play(
         filePath: String,
         useCustomSpeed: Boolean = true,
+        pitchCalibration: Float = 1.0f,
         onFinished: () -> Unit = {}
     ) {
         val file = File(filePath)
         if (!file.exists() || file.length() == 0L) {
             return
         }
+
+        val clampedPitch = pitchCalibration.coerceIn(0.84f, 1.16f)
 
         if (_playingAudioPath.value == filePath && mediaPlayer != null) {
             mediaPlayer?.let { player ->
@@ -70,8 +74,9 @@ class AudioPlayer(private val context: Context) {
                         stopTracker()
                     } else {
                         currentUseCustomSpeed = useCustomSpeed
+                        currentPitchCalibration = clampedPitch
                         val targetSpeed = if (useCustomSpeed) _playbackSpeed.value else 1.0f
-                        applySpeedToPlayer(player, targetSpeed)
+                        applyParamsToPlayer(player, targetSpeed, clampedPitch)
                         player.start()
                         _isPlaying.value = true
                         startTracker()
@@ -85,6 +90,7 @@ class AudioPlayer(private val context: Context) {
 
         stop()
         currentUseCustomSpeed = useCustomSpeed
+        currentPitchCalibration = clampedPitch
         _playingAudioPath.value = filePath
         try {
             mediaPlayer = MediaPlayer().apply {
@@ -98,7 +104,7 @@ class AudioPlayer(private val context: Context) {
                 prepare()
                 _duration.value = this.duration
                 val targetSpeed = if (useCustomSpeed) _playbackSpeed.value else 1.0f
-                applySpeedToPlayer(this, targetSpeed)
+                applyParamsToPlayer(this, targetSpeed, clampedPitch)
                 if (!isPlaying) {
                     start()
                 }
@@ -124,11 +130,11 @@ class AudioPlayer(private val context: Context) {
         }
     }
 
-    private fun applySpeedToPlayer(player: MediaPlayer, speed: Float) {
+    private fun applyParamsToPlayer(player: MediaPlayer, speed: Float, pitch: Float) {
         try {
             val params = player.playbackParams
             params.speed = speed.coerceIn(0.5f, 2.0f)
-            params.pitch = 1.0f
+            params.pitch = pitch.coerceIn(0.84f, 1.16f)
             player.playbackParams = params
         } catch (e: Exception) {
             e.printStackTrace()

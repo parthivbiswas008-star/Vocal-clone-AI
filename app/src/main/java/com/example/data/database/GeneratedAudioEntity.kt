@@ -12,5 +12,7 @@ data class GeneratedAudioEntity(
     val voiceProfileName: String,
     val audioPath: String,
     val durationMs: Long = 0,
+    val emotionStyle: String = "Natural Chat",
+    val pitchCalibration: Float = 1.0f,
     val createdAt: Long = System.currentTimeMillis()
 )

@@ -42,12 +42,21 @@ class VoiceViewModel(
     val generatedAudios: StateFlow<List<GeneratedAudioEntity>> = repository.allGeneratedAudios
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // --- Selected Voice & Language in Studio ---
+    // --- Selected Voice, Language & Human Realism Controls in Studio ---
     private val _selectedVoiceId = MutableStateFlow<Int?>(null)
     val selectedVoiceId: StateFlow<Int?> = _selectedVoiceId
 
     private val _selectedLanguage = MutableStateFlow("English")
     val selectedLanguage: StateFlow<String> = _selectedLanguage
+
+    private val _selectedEmotionStyle = MutableStateFlow("Natural Chat")
+    val selectedEmotionStyle: StateFlow<String> = _selectedEmotionStyle
+
+    private val _naturalBreathsEnabled = MutableStateFlow(true)
+    val naturalBreathsEnabled: StateFlow<Boolean> = _naturalBreathsEnabled
+
+    private val _ultraHumanMode = MutableStateFlow(true)
+    val ultraHumanMode: StateFlow<Boolean> = _ultraHumanMode
 
     // --- API Key State ---
     private val _hasApiKey = MutableStateFlow(repository.apiKeyManager.hasValidKey())
@@ -95,6 +104,7 @@ class VoiceViewModel(
 
     private var recordingJob: Job? = null
     private var analysisJob: Job? = null
+    private var auditionJob: Job? = null
 
     // --- AI Accent & Voice DNA Analysis State ---
     private val _isAnalyzingVoice = MutableStateFlow(false)
@@ -108,6 +118,16 @@ class VoiceViewModel(
 
     private val _analysisNeedsApiKey = MutableStateFlow(false)
     val analysisNeedsApiKey: StateFlow<Boolean> = _analysisNeedsApiKey
+
+    // --- Clone Live Audition (A/B Compare Before Saving) ---
+    private val _isAuditioningClone = MutableStateFlow(false)
+    val isAuditioningClone: StateFlow<Boolean> = _isAuditioningClone
+
+    private val _auditionAudioFile = MutableStateFlow<File?>(null)
+    val auditionAudioFile: StateFlow<File?> = _auditionAudioFile
+
+    private val _auditionError = MutableStateFlow<String?>(null)
+    val auditionError: StateFlow<String?> = _auditionError
 
     // --- Speech Generation State ---
     private val _isGenerating = MutableStateFlow(false)
@@ -184,7 +204,7 @@ class VoiceViewModel(
         _maskedApiKey.value = repository.apiKeyManager.getMaskedKeyPreview()
     }
 
-    // --- Studio Voice & Language Selection ---
+    // --- Studio Controls ---
     fun selectVoiceProfile(profileId: Int, syncLanguage: Boolean = true) {
         _selectedVoiceId.value = profileId
         if (syncLanguage) {
@@ -200,6 +220,18 @@ class VoiceViewModel(
         _selectedLanguage.value = language
     }
 
+    fun selectEmotionStyle(styleId: String) {
+        _selectedEmotionStyle.value = styleId
+    }
+
+    fun toggleNaturalBreaths() {
+        _naturalBreathsEnabled.value = !_naturalBreathsEnabled.value
+    }
+
+    fun toggleUltraHumanMode() {
+        _ultraHumanMode.value = !_ultraHumanMode.value
+    }
+
     fun setPlaybackSpeed(speed: Float) {
         audioPlayer.setPlaybackSpeed(speed)
     }
@@ -212,6 +244,7 @@ class VoiceViewModel(
     fun startRecording() {
         if (_isRecording.value) return
         analysisJob?.cancel()
+        auditionJob?.cancel()
         audioPlayer.stop()
         clearTempSampleOnly()
 
@@ -266,8 +299,8 @@ class VoiceViewModel(
         val durationMs = AudioFileSaver.extractMediaDurationMs(file).takeIf { it > 0 } ?: (capturedSeconds * 1000L)
         _tempSampleMeta.value = formatSampleMetadata(durationMs, file.length())
 
-        if (durationMs < 2000L) {
-            _userMessage.value = "Tip: Recording 8–15 seconds produces a much purer voice clone."
+        if (durationMs < 2500L) {
+            _userMessage.value = "Tip: Recording 10–20 seconds captures a noticeably closer voice clone."
         }
         analyzeCurrentSample(hintLanguage)
     }
@@ -276,6 +309,7 @@ class VoiceViewModel(
     fun importUploadedAudio(uri: Uri, hintLanguage: String) {
         audioPlayer.stop()
         analysisJob?.cancel()
+        auditionJob?.cancel()
         if (_isRecording.value) {
             audioRecorder.stop()
             _isRecording.value = false
@@ -288,6 +322,7 @@ class VoiceViewModel(
             _analysisError.value = null
             _analysisNeedsApiKey.value = false
             _voiceAnalysis.value = null
+            clearAuditionFileOnly()
 
             val importResult = AudioFileSaver.importAudioFromUri(getApplication(), uri)
             importResult.onSuccess { imported ->
@@ -308,6 +343,8 @@ class VoiceViewModel(
         val file = _tempSampleFile.value ?: return
         val mime = _tempSampleMimeType.value
         analysisJob?.cancel()
+        auditionJob?.cancel()
+        clearAuditionFileOnly()
         analysisJob = viewModelScope.launch {
             runSampleAnalysisInternal(file, mime, hintLanguage)
         }
@@ -331,12 +368,67 @@ class VoiceViewModel(
         }
     }
 
+    // --- Instant A/B Clone Match Audition Before Saving ---
+    fun runCloneAudition(
+        chosenBaseVoice: String,
+        customAccent: String,
+        eqProfile: String,
+        pitchCalibration: Float,
+        hintLanguage: String
+    ) {
+        val analysis = _voiceAnalysis.value ?: return
+        auditionJob?.cancel()
+        auditionJob = viewModelScope.launch {
+            _isAuditioningClone.value = true
+            _auditionError.value = null
+            try {
+                val targetLang = analysis.detectedLanguage.ifBlank { hintLanguage }
+                val file = repository.auditionVoiceClone(
+                    analysis = analysis,
+                    chosenPrebuiltVoice = chosenBaseVoice,
+                    customAccent = customAccent,
+                    eqProfile = eqProfile,
+                    language = targetLang
+                )
+                clearAuditionFileOnly()
+                _auditionAudioFile.value = file
+                audioPlayer.play(
+                    filePath = file.absolutePath,
+                    useCustomSpeed = false,
+                    pitchCalibration = pitchCalibration
+                )
+            } catch (e: ApiKeyException) {
+                _auditionError.value = e.message
+                openApiKeyDialog()
+            } catch (e: Exception) {
+                _auditionError.value = e.message ?: "Could not generate clone preview."
+            } finally {
+                _isAuditioningClone.value = false
+            }
+        }
+    }
+
+    fun playAuditionClip(pitchCalibration: Float) {
+        _auditionAudioFile.value?.let { file ->
+            if (file.exists()) {
+                audioPlayer.play(
+                    filePath = file.absolutePath,
+                    useCustomSpeed = false,
+                    pitchCalibration = pitchCalibration
+                )
+            }
+        }
+    }
+
     fun saveClonedVoiceProfile(
         name: String,
         fallbackGender: String,
         customAccentOverride: String,
         hintLanguage: String,
         customDescription: String,
+        selectedBaseVoiceOverride: String?,
+        pitchCalibration: Float,
+        eqProfile: String,
         onComplete: (Int) -> Unit = {}
     ) {
         if (_isRecording.value) {
@@ -378,6 +470,8 @@ class VoiceViewModel(
                 val resolvedDescription = customDescription.trim().ifBlank {
                     "Cloned $resolvedAccent voice ($resolvedPitch). $resolvedTraits"
                 }
+                val chosenCode = selectedBaseVoiceOverride?.takeIf { it.isNotBlank() }
+                    ?: analysis?.bestMatchingPrebuiltVoice
 
                 val profile = VoiceProfileEntity(
                     name = name.trim().ifBlank { "My Cloned Voice" },
@@ -385,7 +479,7 @@ class VoiceViewModel(
                     accent = resolvedAccent,
                     audioPath = savedFile.absolutePath,
                     isPrebuilt = false,
-                    prebuiltCode = analysis?.bestMatchingPrebuiltVoice,
+                    prebuiltCode = chosenCode,
                     recordingLanguage = resolvedLanguage,
                     pitchTone = resolvedPitch,
                     paceSpeed = "1.0x",
@@ -396,7 +490,11 @@ class VoiceViewModel(
                     estimatedAge = analysis?.estimatedAge ?: "Adult",
                     speakingCadence = analysis?.speakingCadence ?: "Natural conversational rhythm",
                     confidenceScore = analysis?.confidenceScore ?: 88,
-                    audioMimeType = mime
+                    audioMimeType = mime,
+                    pitchCalibration = pitchCalibration.coerceIn(0.88f, 1.12f),
+                    eqProfile = eqProfile.ifBlank { analysis?.eqProfile ?: "warm" },
+                    phoneticNotes = analysis?.phoneticNotes.orEmpty(),
+                    secondaryPrebuiltCode = analysis?.secondaryMatchingPrebuiltVoice
                 )
 
                 val newId = repository.insertVoiceProfile(profile).toInt()
@@ -404,6 +502,7 @@ class VoiceViewModel(
                 if (VoiceCatalog.supportedLanguages.any { it.displayName.equals(resolvedLanguage, true) }) {
                     _selectedLanguage.value = resolvedLanguage
                 }
+                clearAuditionFileOnly()
                 _tempSampleFile.value = null
                 _tempSampleDisplayName.value = null
                 _tempSampleMeta.value = null
@@ -422,6 +521,8 @@ class VoiceViewModel(
     fun cancelCloningSession() {
         analysisJob?.cancel()
         analysisJob = null
+        auditionJob?.cancel()
+        auditionJob = null
         if (_isRecording.value) {
             audioRecorder.stop()
             _isRecording.value = false
@@ -429,8 +530,10 @@ class VoiceViewModel(
             recordingJob = null
         }
         audioPlayer.stop()
+        clearAuditionFileOnly()
         clearTempSampleOnly()
         _isAnalyzingVoice.value = false
+        _isAuditioningClone.value = false
         _recordingAmplitudes.value = emptyList()
         _recordingDurationSec.value = 0
     }
@@ -447,11 +550,18 @@ class VoiceViewModel(
         _analysisNeedsApiKey.value = false
     }
 
+    private fun clearAuditionFileOnly() {
+        _auditionAudioFile.value?.let {
+            if (it.exists()) it.delete()
+        }
+        _auditionAudioFile.value = null
+        _auditionError.value = null
+    }
+
     fun playPreviewSample() {
         _tempSampleFile.value?.let { file ->
             if (file.exists()) {
-                // Play raw sample at authentic 1.0x so user hears true recording quality
-                audioPlayer.play(file.absolutePath, useCustomSpeed = false)
+                audioPlayer.play(file.absolutePath, useCustomSpeed = false, pitchCalibration = 1.0f)
             }
         }
     }
@@ -479,9 +589,21 @@ class VoiceViewModel(
             _generationError.value = null
             _generationSuccess.value = false
             try {
-                val created = repository.generateSpeech(title, text, voiceProfile, language)
+                val created = repository.generateSpeech(
+                    title = title,
+                    text = text,
+                    voiceProfile = voiceProfile,
+                    language = language,
+                    emotionStyle = _selectedEmotionStyle.value,
+                    naturalBreaths = _naturalBreathsEnabled.value,
+                    ultraHumanMode = _ultraHumanMode.value
+                )
                 _generationSuccess.value = true
-                audioPlayer.play(created.audioPath, useCustomSpeed = true)
+                audioPlayer.play(
+                    filePath = created.audioPath,
+                    useCustomSpeed = true,
+                    pitchCalibration = created.pitchCalibration
+                )
             } catch (e: ApiKeyException) {
                 _generationError.value = e.message
                 openApiKeyDialog()
@@ -515,8 +637,16 @@ class VoiceViewModel(
     }
 
     // --- Audio Playback ---
-    fun playAudio(path: String, useCustomSpeed: Boolean = true) {
-        audioPlayer.play(path, useCustomSpeed = useCustomSpeed)
+    fun playAudio(
+        path: String,
+        useCustomSpeed: Boolean = true,
+        pitchCalibration: Float = 1.0f
+    ) {
+        audioPlayer.play(
+            filePath = path,
+            useCustomSpeed = useCustomSpeed,
+            pitchCalibration = pitchCalibration
+        )
     }
 
     fun stopAudio() {
@@ -530,8 +660,10 @@ class VoiceViewModel(
     override fun onCleared() {
         super.onCleared()
         analysisJob?.cancel()
+        auditionJob?.cancel()
         recordingJob?.cancel()
         audioPlayer.stop()
+        clearAuditionFileOnly()
         if (_isRecording.value) {
             audioRecorder.stop()
         }

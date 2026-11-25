@@ -59,6 +59,9 @@ fun TtsScreen(
     val voiceProfiles by viewModel.voiceProfiles.collectAsStateWithLifecycle()
     val selectedVoiceId by viewModel.selectedVoiceId.collectAsStateWithLifecycle()
     val selectedLanguage by viewModel.selectedLanguage.collectAsStateWithLifecycle()
+    val selectedEmotionStyle by viewModel.selectedEmotionStyle.collectAsStateWithLifecycle()
+    val naturalBreathsEnabled by viewModel.naturalBreathsEnabled.collectAsStateWithLifecycle()
+    val ultraHumanMode by viewModel.ultraHumanMode.collectAsStateWithLifecycle()
     val hasApiKey by viewModel.hasApiKey.collectAsStateWithLifecycle()
     val isGenerating by viewModel.isGenerating.collectAsStateWithLifecycle()
     val generationError by viewModel.generationError.collectAsStateWithLifecycle()
@@ -355,10 +358,21 @@ fun TtsScreen(
                                 Text(
                                     text = selectedProfile?.let { p ->
                                         val accent = p.detectedAccent?.takeIf { it.isNotBlank() } ?: p.accent
-                                        "${p.gender} • $accent • ${p.pitchTone}"
+                                        val calInfo = if (!p.isPrebuilt) {
+                                            val pitchPct = kotlin.math.round((p.pitchCalibration - 1.0f) * 100f).toInt()
+                                            val pitchTag = when {
+                                                pitchPct > 0 -> "+${pitchPct}% pitch"
+                                                pitchPct < 0 -> "${pitchPct}% pitch"
+                                                else -> "0% pitch"
+                                            }
+                                            " • ${p.eqProfile.replaceFirstChar { it.uppercase() }} EQ ($pitchTag)"
+                                        } else ""
+                                        "${p.gender} • $accent • ${p.pitchTone}$calInfo"
                                     } ?: "Tap to choose a voice",
                                     fontSize = 11.sp,
-                                    color = CosmicCyan
+                                    color = CosmicCyan,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 if (!selectedProfile?.description.isNullOrBlank()) {
                                     Spacer(modifier = Modifier.height(4.dp))
@@ -499,6 +513,160 @@ fun TtsScreen(
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                         color = if (isSelected) DeepSpaceBackground else CosmicWhite
                     )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // 2B. Human Emotion & Delivery Style Selector
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Mood, contentDescription = null, tint = CosmicCyan, modifier = Modifier.size(15.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Human Delivery & Emotion",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = CosmicCyan
+                )
+            }
+            Text(
+                text = "Lifelike Prosody",
+                fontSize = 10.sp,
+                color = CosmicMutedText
+            )
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            items(VoiceCatalog.emotionStyles, key = { it.id }) { style ->
+                val isSelected = selectedEmotionStyle == style.id
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(if (isSelected) CosmicViolet else LiquidGlassSurface)
+                        .border(
+                            1.dp,
+                            if (isSelected) CosmicCyan else LiquidGlassBorder,
+                            RoundedCornerShape(16.dp)
+                        )
+                        .clickable { viewModel.selectEmotionStyle(style.id) }
+                        .padding(horizontal = 12.dp, vertical = 7.dp)
+                        .testTag("emotion_chip_${style.id.lowercase().replace(" ", "_")}")
+                ) {
+                    Text(
+                        text = style.labelWithIcon,
+                        fontSize = 11.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                        color = if (isSelected) CosmicWhite else CosmicMutedText
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // 2C. Ultra-Human Pro & Natural Breaths Realism Toggles
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(if (ultraHumanMode) CosmicCyan.copy(alpha = 0.16f) else LiquidGlassSurface)
+                    .border(
+                        1.dp,
+                        if (ultraHumanMode) CosmicCyan.copy(alpha = 0.75f) else LiquidGlassBorder,
+                        RoundedCornerShape(14.dp)
+                    )
+                    .clickable { viewModel.toggleUltraHumanMode() }
+                    .padding(horizontal = 10.dp, vertical = 9.dp)
+                    .testTag("toggle_ultra_human_pro")
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = "Ultra-Human Pro Engine",
+                        tint = if (ultraHumanMode) CosmicCyan else CosmicMutedText,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Column {
+                        Text(
+                            text = if (ultraHumanMode) "Ultra-Human Pro: ON" else "Fast Engine Mode",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (ultraHumanMode) CosmicCyan else CosmicWhite,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = if (ultraHumanMode) "Studio 3.1 / Pro TTS + EQ" else "Standard fast flash TTS",
+                            fontSize = 9.sp,
+                            color = CosmicMutedText,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(if (naturalBreathsEnabled) CosmicViolet.copy(alpha = 0.22f) else LiquidGlassSurface)
+                    .border(
+                        1.dp,
+                        if (naturalBreathsEnabled) CosmicViolet else LiquidGlassBorder,
+                        RoundedCornerShape(14.dp)
+                    )
+                    .clickable { viewModel.toggleNaturalBreaths() }
+                    .padding(horizontal = 10.dp, vertical = 9.dp)
+                    .testTag("toggle_natural_breaths")
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Air,
+                        contentDescription = "Natural Breaths and Pauses",
+                        tint = if (naturalBreathsEnabled) CosmicCyan else CosmicMutedText,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Column {
+                        Text(
+                            text = if (naturalBreathsEnabled) "Natural Breaths: ON" else "Clean Breaths: OFF",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (naturalBreathsEnabled) CosmicWhite else CosmicMutedText,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = if (naturalBreathsEnabled) "Organic pauses & airflow" else "Tight studio phrasing",
+                            fontSize = 9.sp,
+                            color = CosmicMutedText,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
         }
@@ -729,7 +897,7 @@ fun TtsScreen(
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "Synthesizing Pure Studio Audio...",
+                        text = if (ultraHumanMode) "Synthesizing Lifelike Studio Audio..." else "Synthesizing Pure Studio Audio...",
                         color = CosmicCyan,
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp
@@ -785,7 +953,13 @@ fun TtsScreen(
                                     .size(40.dp)
                                     .clip(CircleShape)
                                     .background(LiquidActiveButtonBrush)
-                                    .clickable { viewModel.playAudio(latestAudio.audioPath) }
+                                    .clickable {
+                                        viewModel.playAudio(
+                                            path = latestAudio.audioPath,
+                                            useCustomSpeed = true,
+                                            pitchCalibration = latestAudio.pitchCalibration
+                                        )
+                                    }
                                     .testTag("latest_play_button")
                             ) {
                                 Icon(
@@ -806,7 +980,7 @@ fun TtsScreen(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "${latestAudio.voiceProfileName} • $latestLangFlag ${latestAudio.language} • ${playbackSpeed}x",
+                                    text = "${latestAudio.voiceProfileName} • $latestLangFlag ${latestAudio.language} • ${latestAudio.emotionStyle} • ${playbackSpeed}x",
                                     fontSize = 11.sp,
                                     color = CosmicCyan,
                                     maxLines = 1,

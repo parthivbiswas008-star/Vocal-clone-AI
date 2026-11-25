@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -173,7 +174,7 @@ fun ApiKeySetupDialog(
                                 color = CosmicCyan
                             )
                         }
-                        Icon(Icons.Default.OpenInNew, contentDescription = "Open AI Studio", tint = CosmicCyan, modifier = Modifier.size(18.dp))
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "Open AI Studio", tint = CosmicCyan, modifier = Modifier.size(18.dp))
                     }
                 }
 

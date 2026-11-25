@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [VoiceProfileEntity::class, GeneratedAudioEntity::class],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class VoiceDatabase : RoomDatabase() {
@@ -31,6 +31,17 @@ abstract class VoiceDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE voice_profiles ADD COLUMN pitchCalibration REAL NOT NULL DEFAULT 1.0")
+                db.execSQL("ALTER TABLE voice_profiles ADD COLUMN eqProfile TEXT NOT NULL DEFAULT 'warm'")
+                db.execSQL("ALTER TABLE voice_profiles ADD COLUMN phoneticNotes TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE voice_profiles ADD COLUMN secondaryPrebuiltCode TEXT")
+                db.execSQL("ALTER TABLE generated_audios ADD COLUMN emotionStyle TEXT NOT NULL DEFAULT 'Natural Chat'")
+                db.execSQL("ALTER TABLE generated_audios ADD COLUMN pitchCalibration REAL NOT NULL DEFAULT 1.0")
+            }
+        }
+
         fun getDatabase(context: Context): VoiceDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -38,7 +49,7 @@ abstract class VoiceDatabase : RoomDatabase() {
                     VoiceDatabase::class.java,
                     "voice_clone_database"
                 )
-                    .addMigrations(MIGRATION_2_3)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                 INSTANCE = instance

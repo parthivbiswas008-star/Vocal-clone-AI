@@ -26,7 +26,97 @@ data class ScriptOption(
     val text: String
 )
 
+data class EmotionStyleOption(
+    val id: String,
+    val label: String,
+    val icon: String,
+    val directionCue: String
+) {
+    val labelWithIcon: String
+        get() = "$icon $label"
+}
+
 object VoiceCatalog {
+    val emotionStyles: List<EmotionStyleOption> = listOf(
+        EmotionStyleOption(
+            id = "Natural Chat",
+            label = "Natural Chat",
+            icon = "\uD83D\uDCAC",
+            directionCue = "Speak like a real person talking casually face-to-face with a friend — relaxed, authentic, slightly imperfect natural rhythm, warm spontaneous intonation, zero robotic announcer stiffness"
+        ),
+        EmotionStyleOption(
+            id = "Warm Story",
+            label = "Warm Story",
+            icon = "\uD83D\uDCD6",
+            directionCue = "Deliver like an intimate human storyteller sitting nearby — warm rising and falling melody, expressive gentle pauses at commas and periods, rich emotional color"
+        ),
+        EmotionStyleOption(
+            id = "Emotional",
+            label = "Emotional",
+            icon = "\u2764\uFE0F",
+            directionCue = "Speak with genuine heartfelt emotion, tender sincerity, soft vulnerable vocal texture, subtle breathy pauses, and heartfelt emphasis on meaningful words"
+        ),
+        EmotionStyleOption(
+            id = "Cheerful",
+            label = "Cheerful",
+            icon = "\uD83D\uDE0A",
+            directionCue = "Speak with a genuine smile in your voice — lively, upbeat, friendly warmth, natural cheerful lift at key words, bright human energy"
+        ),
+        EmotionStyleOption(
+            id = "Dramatic",
+            label = "Dramatic",
+            icon = "\uD83C\uDFAC",
+            directionCue = "Deliver with cinematic human depth — resonant chest tone, deliberate suspenseful pauses, strong expressive contrast, compelling gravitas"
+        ),
+        EmotionStyleOption(
+            id = "Calm & Soft",
+            label = "Calm & Soft",
+            icon = "\uD83C\uDF19",
+            directionCue = "Speak softly and peacefully close to the microphone — gentle soothing breath, unhurried calm phrasing, warm tender endings"
+        ),
+        EmotionStyleOption(
+            id = "Podcast Host",
+            label = "Podcast Host",
+            icon = "\uD83C\uDF99\uFE0F",
+            directionCue = "Speak like a charismatic, relaxed podcast host talking naturally into a warm condenser mic — engaging, conversational, articulate yet completely unscripted-sounding"
+        )
+    )
+
+    val eqToneOptions: List<Pair<String, String>> = listOf(
+        "warm" to "Warm",
+        "deep" to "Deep",
+        "balanced" to "Balanced",
+        "bright" to "Bright",
+        "intimate" to "Intimate"
+    )
+
+    fun emotionDirectionFor(styleId: String): String {
+        return emotionStyles.firstOrNull { it.id.equals(styleId, ignoreCase = true) }?.directionCue
+            ?: emotionStyles.first().directionCue
+    }
+
+    fun cloneAuditionSentence(language: String): String {
+        return when {
+            language.equals("Bengali", true) ->
+                "হ্যালো! এটা আমার ক্লোন করা কণ্ঠস্বর, শুনতে এখন একদম স্বাভাবিক আর বাস্তব মনে হচ্ছে।"
+            language.equals("Hindi", true) ->
+                "नमस्ते! यह मेरी क्लोन की हुई आवाज़ है, जो अब बिल्कुल स्वाभाविक और असली लग रही है।"
+            language.equals("Spanish", true) ->
+                "¡Hola! Esta es mi voz clonada, sonando completamente natural y humana."
+            language.equals("French", true) ->
+                "Bonjour ! Voici ma voix clonée, avec un timbre chaleureux et tout à fait naturel."
+            language.equals("Arabic", true) ->
+                "مرحباً! هذا صوتي المستنسخ الآن بنبرة طبيعية وواقعية للغاية."
+            language.equals("German", true) ->
+                "Hallo! Das ist meine geklonte Stimme, die jetzt ganz natürlich und menschlich klingt."
+            language.equals("Japanese", true) ->
+                "こんにちは。これが私のクローン音声です。とても自然で人間らしく聞こえます。"
+            language.equals("Urdu", true) ->
+                "السلام علیکم! یہ میری کلون کی ہوئی آواز ہے جو بالکل قدرتی اور اصلی لگ رہی ہے۔"
+            else ->
+                "Hey there! This is my cloned voice speaking naturally, capturing my real accent and warmth."
+        }
+    }
     val supportedLanguages: List<LanguageOption> = listOf(
         LanguageOption("en-US", "English", "\uD83C\uDDFA\uD83C\uDDF8", "US / UK / Global English"),
         LanguageOption("bn-BD", "Bengali", "\uD83C\uDDE7\uD83C\uDDE9", "Bengali (Bangla)"),
