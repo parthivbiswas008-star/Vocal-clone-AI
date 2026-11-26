@@ -1,48 +1,61 @@
 package com.example.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
-
-private val CosmicColorScheme = darkColorScheme(
-    primary = CosmicViolet,
-    secondary = CosmicIndigo,
-    tertiary = CosmicCyan,
-    background = DeepSpaceBackground,
-    surface = SpaceCard,
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = DeepSpaceBackground,
-    onBackground = CosmicWhite,
-    onSurface = CosmicWhite,
-    surfaceVariant = SpaceCardElevated,
-    onSurfaceVariant = CosmicWhite,
-    error = SignalRed
-)
-
-private val LightColorScheme = lightColorScheme(
-    primary = CosmicViolet,
-    secondary = CosmicIndigo,
-    tertiary = CosmicCyan,
-    background = Color(0xFFF7F5FB),
-    surface = Color.White,
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF16132A),
-    onSurface = Color(0xFF16132A),
-    surfaceVariant = Color(0xFFECE9F3)
-)
+import com.example.util.AccentColorPreset
+import com.example.util.AppThemePreset
 
 @Composable
 fun MyApplicationTheme(
-    darkTheme: Boolean = true, // Force dark theme for that premium studio feel
+    themePreset: AppThemePreset = AppThemePreset.COSMIC_GLASS,
+    accentPreset: AccentColorPreset = AccentColorPreset.CYAN,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = if (darkTheme) CosmicColorScheme else LightColorScheme
+    val palette = ThemeState.resolvePalette(themePreset, accentPreset)
+    if (ThemeState.current != palette) {
+        ThemeState.current = palette
+    }
+    SideEffect {
+        ThemeState.current = palette
+    }
+
+    val colorScheme = if (palette.isLight) {
+        lightColorScheme(
+            primary = palette.accentPrimary,
+            secondary = palette.accentSecondary,
+            tertiary = palette.accentPurple,
+            background = palette.background,
+            surface = palette.luminousSurface,
+            onPrimary = Color.White,
+            onSecondary = Color.White,
+            onTertiary = Color.White,
+            onBackground = palette.textPrimary,
+            onSurface = palette.textPrimary,
+            surfaceVariant = palette.glassSurfaceElevated,
+            onSurfaceVariant = palette.textMuted,
+            error = palette.signalRed
+        )
+    } else {
+        darkColorScheme(
+            primary = palette.accentSecondary,
+            secondary = palette.accentDeep,
+            tertiary = palette.accentPrimary,
+            background = palette.background,
+            surface = palette.card,
+            onPrimary = Color.White,
+            onSecondary = Color.White,
+            onTertiary = palette.background,
+            onBackground = palette.textPrimary,
+            onSurface = palette.textPrimary,
+            surfaceVariant = palette.cardElevated,
+            onSurfaceVariant = palette.textPrimary,
+            error = palette.signalRed
+        )
+    }
 
     MaterialTheme(
         colorScheme = colorScheme,

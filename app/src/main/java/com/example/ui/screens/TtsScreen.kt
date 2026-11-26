@@ -42,6 +42,7 @@ import com.example.data.VoiceCatalog
 import com.example.data.database.VoiceProfileEntity
 import com.example.ui.components.AudioWaveformPlayerBar
 import com.example.ui.theme.*
+import com.example.ui.viewmodel.ApiKeyDialogTab
 import com.example.ui.viewmodel.VoiceViewModel
 import com.example.util.AudioFileSaver
 import java.util.Locale
@@ -53,6 +54,7 @@ private val SPEED_OPTIONS = listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
 fun TtsScreen(
     viewModel: VoiceViewModel,
     onNavigateToProfiles: () -> Unit,
+    onOpenSettings: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -64,6 +66,8 @@ fun TtsScreen(
     val naturalBreathsEnabled by viewModel.naturalBreathsEnabled.collectAsStateWithLifecycle()
     val ultraHumanMode by viewModel.ultraHumanMode.collectAsStateWithLifecycle()
     val hasApiKey by viewModel.hasApiKey.collectAsStateWithLifecycle()
+    val hasCartesiaApiKey by viewModel.hasCartesiaApiKey.collectAsStateWithLifecycle()
+    val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
     val isGenerating by viewModel.isGenerating.collectAsStateWithLifecycle()
     val generationError by viewModel.generationError.collectAsStateWithLifecycle()
     val generationSuccess by viewModel.generationSuccess.collectAsStateWithLifecycle()
@@ -110,6 +114,10 @@ fun TtsScreen(
         }
     }
 
+    val glowPrimary = CosmicCyan.copy(alpha = 0.14f)
+    val glowSecondary = CosmicViolet.copy(alpha = 0.12f)
+    val hasAnyApiKey = hasApiKey || hasCartesiaApiKey
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -117,14 +125,14 @@ fun TtsScreen(
             .drawBehind {
                 drawCircle(
                     brush = Brush.radialGradient(
-                        colors = listOf(Color(0x2200F5D4), Color.Transparent),
+                        colors = listOf(glowPrimary, Color.Transparent),
                         center = Offset(size.width * 0.9f, size.height * 0.08f),
                         radius = size.width * 0.65f
                     )
                 )
                 drawCircle(
                     brush = Brush.radialGradient(
-                        colors = listOf(Color(0x1C9D4EDD), Color.Transparent),
+                        colors = listOf(glowSecondary, Color.Transparent),
                         center = Offset(size.width * 0.1f, size.height * 0.6f),
                         radius = size.width * 0.7f
                     )
@@ -135,7 +143,7 @@ fun TtsScreen(
     ) {
         Spacer(modifier = Modifier.height(14.dp))
 
-        // App Brand Header + Interactive API Key Status Pill
+        // App Brand Header + Interactive API Keys Pill + Settings Icon
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -163,14 +171,14 @@ fun TtsScreen(
                 Column {
                     Text(
                         text = "AI Voice Clone Maker",
-                        fontSize = 17.sp,
+                        fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         color = CosmicWhite,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = "Multilingual TTS & Voice Cloning Studio",
+                        text = if (hasCartesiaApiKey) "Cartesia 1:1 + Studio TTS" else "Multilingual TTS & Voice Cloning",
                         fontSize = 11.sp,
                         color = CosmicMutedText,
                         maxLines = 1,
@@ -179,41 +187,74 @@ fun TtsScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(6.dp))
 
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(if (hasApiKey) LiquidGlassSurfaceElevated else SignalRed.copy(alpha = 0.2f))
-                    .border(
-                        1.dp,
-                        if (hasApiKey) CosmicCyan.copy(alpha = 0.6f) else SignalRed.copy(alpha = 0.8f),
-                        RoundedCornerShape(14.dp)
-                    )
-                    .clickable { viewModel.openApiKeyDialog() }
-                    .padding(horizontal = 10.dp, vertical = 7.dp)
-                    .testTag("api_key_button")
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(if (hasAnyApiKey) LiquidGlassSurfaceElevated else SignalRed.copy(alpha = 0.2f))
+                        .border(
+                            1.dp,
+                            if (hasAnyApiKey) CosmicCyan.copy(alpha = 0.65f) else SignalRed.copy(alpha = 0.8f),
+                            RoundedCornerShape(14.dp)
+                        )
+                        .clickable {
+                            viewModel.openApiKeyDialog(
+                                if (!hasCartesiaApiKey) ApiKeyDialogTab.CARTESIA else ApiKeyDialogTab.GEMINI
+                            )
+                        }
+                        .padding(horizontal = 9.dp, vertical = 7.dp)
+                        .testTag("api_key_button")
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Key,
+                            contentDescription = "Configure API Keys",
+                            tint = if (hasAnyApiKey) CosmicCyan else SignalRed,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        val keyLabel = when {
+                            hasCartesiaApiKey && hasApiKey -> "2 Keys"
+                            hasCartesiaApiKey -> "1:1 Key"
+                            hasApiKey -> "API Key"
+                            else -> "Set Keys"
+                        }
+                        Text(
+                            text = keyLabel,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (hasAnyApiKey) CosmicCyan else CosmicWhite
+                        )
+                    }
+                }
+
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(LiquidGlassSurfaceElevated)
+                        .border(1.dp, LiquidGlassBorder, CircleShape)
+                        .clickable { onOpenSettings() }
+                        .testTag("header_settings_button")
+                ) {
                     Icon(
-                        imageVector = Icons.Default.Key,
-                        contentDescription = "Configure Gemini API Key",
-                        tint = if (hasApiKey) CosmicCyan else SignalRed,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(modifier = Modifier.width(5.dp))
-                    Text(
-                        text = if (hasApiKey) "API Key" else "Set Key",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (hasApiKey) CosmicCyan else CosmicWhite
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Open Settings",
+                        tint = CosmicCyan,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
         }
 
-        // Inline helper banner when API key is missing
-        if (!hasApiKey) {
+        // Inline helper banner when no API keys are configured
+        if (!hasAnyApiKey) {
             Spacer(modifier = Modifier.height(12.dp))
             Box(
                 modifier = Modifier
@@ -221,7 +262,7 @@ fun TtsScreen(
                     .clip(RoundedCornerShape(16.dp))
                     .background(SignalRed.copy(alpha = 0.14f))
                     .border(1.dp, SignalRed.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
-                    .clickable { viewModel.openApiKeyDialog() }
+                    .clickable { viewModel.openApiKeyDialog(ApiKeyDialogTab.CARTESIA) }
                     .padding(12.dp)
                     .testTag("missing_api_key_banner")
             ) {
@@ -238,13 +279,13 @@ fun TtsScreen(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "Gemini API Key Required",
+                                text = "API Key Required (Cartesia AI / Gemini)",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = CosmicWhite
                             )
                             Text(
-                                text = "Tap here to paste & verify your free Gemini API key",
+                                text = "Tap here to add Cartesia AI (1:1 exact clone) or Gemini API key",
                                 fontSize = 10.sp,
                                 color = CosmicMutedText
                             )
@@ -343,10 +384,13 @@ fun TtsScreen(
                                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                                         ) {
                                             Text(
-                                                text = if (!selectedProfile!!.isPrebuilt) {
-                                                    "$langFlag CLONED"
-                                                } else {
-                                                    "$langFlag ${selectedProfile!!.language.uppercase()}"
+                                                text = when {
+                                                    !selectedProfile!!.isPrebuilt && !selectedProfile!!.cartesiaVoiceId.isNullOrBlank() ->
+                                                        "$langFlag 1:1 CARTESIA"
+                                                    !selectedProfile!!.isPrebuilt ->
+                                                        "$langFlag CLONED"
+                                                    else ->
+                                                        "$langFlag ${selectedProfile!!.language.uppercase()}"
                                                 },
                                                 fontSize = 9.sp,
                                                 fontWeight = FontWeight.Bold,
@@ -359,15 +403,20 @@ fun TtsScreen(
                                 Text(
                                     text = selectedProfile?.let { p ->
                                         val accent = p.detectedAccent?.takeIf { it.isNotBlank() } ?: p.accent
-                                        val calInfo = if (!p.isPrebuilt) {
-                                            val pitchPct = kotlin.math.round((p.pitchCalibration - 1.0f) * 100f).toInt()
-                                            val pitchTag = when {
-                                                pitchPct > 0 -> "+${pitchPct}% pitch"
-                                                pitchPct < 0 -> "${pitchPct}% pitch"
-                                                else -> "0% pitch"
+                                        val calInfo = when {
+                                            !p.isPrebuilt && !p.cartesiaVoiceId.isNullOrBlank() ->
+                                                " • Sonic-3 True 1:1 Clone"
+                                            !p.isPrebuilt -> {
+                                                val pitchPct = kotlin.math.round((p.pitchCalibration - 1.0f) * 100f).toInt()
+                                                val pitchTag = when {
+                                                    pitchPct > 0 -> "+${pitchPct}% pitch"
+                                                    pitchPct < 0 -> "${pitchPct}% pitch"
+                                                    else -> "0% pitch"
+                                                }
+                                                " • ${p.eqProfile.replaceFirstChar { it.uppercase() }} EQ ($pitchTag)"
                                             }
-                                            " • ${p.eqProfile.replaceFirstChar { it.uppercase() }} EQ ($pitchTag)"
-                                        } else ""
+                                            else -> ""
+                                        }
                                         "${p.gender} • $accent • ${p.pitchTone}$calInfo"
                                     } ?: "Tap to choose a voice",
                                     fontSize = 11.sp,
@@ -445,7 +494,11 @@ fun TtsScreen(
                                                     .padding(horizontal = 5.dp, vertical = 1.dp)
                                             ) {
                                                 Text(
-                                                    text = if (!profile.isPrebuilt) "$langFlag MY CLONE" else "$langFlag ${profile.language}",
+                                                    text = when {
+                                                        !profile.isPrebuilt && !profile.cartesiaVoiceId.isNullOrBlank() -> "$langFlag 1:1 CLONE"
+                                                        !profile.isPrebuilt -> "$langFlag MY CLONE"
+                                                        else -> "$langFlag ${profile.language}"
+                                                    },
                                                     fontSize = 9.sp,
                                                     color = if (!profile.isPrebuilt) CosmicCyan else CosmicWhite,
                                                     fontWeight = FontWeight.Bold
@@ -474,6 +527,41 @@ fun TtsScreen(
                                 }
                             )
                         }
+                    }
+                }
+
+                // Helpful 1:1 Cartesia upgrade hint for cloned voices
+                if (selectedProfile != null && !selectedProfile!!.isPrebuilt && selectedProfile!!.cartesiaVoiceId.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    if (!hasCartesiaApiKey) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(CosmicCyan.copy(alpha = 0.1f))
+                                .border(0.8.dp, CosmicCyan.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+                                .clickable { viewModel.openApiKeyDialog(ApiKeyDialogTab.CARTESIA) }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                .testTag("tts_cartesia_hint_pill")
+                        ) {
+                            Text(
+                                text = "Add Cartesia AI key for 100% identical 1:1 voice clone",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = CosmicCyan,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = CosmicCyan, modifier = Modifier.size(16.dp))
+                        }
+                    } else if (appSettings.preferCartesiaCloning) {
+                        Text(
+                            text = "✓ Cartesia AI key ready — will auto-upgrade this clone to 1:1 exact voice on generate",
+                            fontSize = 10.sp,
+                            color = CosmicCyan,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
                 }
             }
@@ -1019,26 +1107,69 @@ fun TtsScreen(
                     } else {
                         latestAudio.durationMs.toInt()
                     }
-                    AudioWaveformPlayerBar(
-                        audioPath = latestAudio.audioPath,
-                        isActiveTrack = isLatestActive,
-                        isPlaying = isLatestPlaying,
-                        currentPositionMs = if (isLatestActive) playPosition else 0,
-                        durationMs = latestDurationMs,
-                        onSeekFraction = { fraction ->
-                            viewModel.seekAudioFraction(
-                                path = latestAudio.audioPath,
-                                fraction = fraction,
-                                useCustomSpeed = true,
-                                pitchCalibration = latestAudio.pitchCalibration
+                    if (appSettings.showWaveforms) {
+                        AudioWaveformPlayerBar(
+                            audioPath = latestAudio.audioPath,
+                            isActiveTrack = isLatestActive,
+                            isPlaying = isLatestPlaying,
+                            currentPositionMs = if (isLatestActive) playPosition else 0,
+                            durationMs = latestDurationMs,
+                            onSeekFraction = { fraction ->
+                                viewModel.seekAudioFraction(
+                                    path = latestAudio.audioPath,
+                                    fraction = fraction,
+                                    useCustomSpeed = true,
+                                    pitchCalibration = latestAudio.pitchCalibration
+                                )
+                            },
+                            barCount = 54,
+                            waveformHeight = 52.dp,
+                            showTimeLabels = true,
+                            speedLabel = "${playbackSpeed}x",
+                            testTagName = "latest_audio_waveform"
+                        )
+                    } else {
+                        val safeDur = latestDurationMs.coerceAtLeast(1)
+                        val progress = if (isLatestActive) {
+                            (playPosition.toFloat() / safeDur.toFloat()).coerceIn(0f, 1f)
+                        } else 0f
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Slider(
+                                value = progress,
+                                onValueChange = { fraction ->
+                                    viewModel.seekAudioFraction(
+                                        path = latestAudio.audioPath,
+                                        fraction = fraction,
+                                        useCustomSpeed = true,
+                                        pitchCalibration = latestAudio.pitchCalibration
+                                    )
+                                },
+                                colors = SliderDefaults.colors(
+                                    thumbColor = CosmicCyan,
+                                    activeTrackColor = CosmicCyan,
+                                    inactiveTrackColor = LiquidGlassBorder
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(28.dp)
                             )
-                        },
-                        barCount = 54,
-                        waveformHeight = 52.dp,
-                        showTimeLabels = true,
-                        speedLabel = "${playbackSpeed}x",
-                        testTagName = "latest_audio_waveform"
-                    )
+                            Row(
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = formatAudioTime(if (isLatestActive) playPosition else 0),
+                                    fontSize = 10.sp,
+                                    color = CosmicMutedText
+                                )
+                                Text(
+                                    text = formatAudioTime(latestDurationMs),
+                                    fontSize = 10.sp,
+                                    color = CosmicMutedText
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }

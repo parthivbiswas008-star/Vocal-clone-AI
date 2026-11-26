@@ -6,12 +6,13 @@ import com.example.BuildConfig
 class ApiKeyManager(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    // --- Gemini API Key (Voices, Accent DNA & Fallback TTS) ---
     fun getActiveApiKey(): String? {
         val custom = sanitize(prefs.getString(KEY_CUSTOM_API_KEY, null))
-        if (isValidFormat(custom)) return custom
+        if (isValidGeminiFormat(custom)) return custom
 
         val builtIn = sanitize(BuildConfig.GEMINI_API_KEY)
-        if (isValidFormat(builtIn)) return builtIn
+        if (isValidGeminiFormat(builtIn)) return builtIn
 
         return null
     }
@@ -20,12 +21,12 @@ class ApiKeyManager(context: Context) {
 
     fun isUsingCustomKey(): Boolean {
         val custom = sanitize(prefs.getString(KEY_CUSTOM_API_KEY, null))
-        return isValidFormat(custom)
+        return isValidGeminiFormat(custom)
     }
 
     fun hasBuiltInKey(): Boolean {
         val builtIn = sanitize(BuildConfig.GEMINI_API_KEY)
-        return isValidFormat(builtIn)
+        return isValidGeminiFormat(builtIn)
     }
 
     fun saveCustomApiKey(rawKey: String) {
@@ -39,6 +40,47 @@ class ApiKeyManager(context: Context) {
 
     fun getMaskedKeyPreview(): String {
         val key = getActiveApiKey() ?: return "Not configured"
+        return maskKey(key)
+    }
+
+    // --- Cartesia AI API Key (True 1:1 Zero-Shot Voice Cloning & Sonic-3 TTS) ---
+    fun getActiveCartesiaApiKey(): String? {
+        val custom = sanitize(prefs.getString(KEY_CUSTOM_CARTESIA_API_KEY, null))
+        if (isValidCartesiaFormat(custom)) return custom
+
+        val builtIn = sanitize(BuildConfig.CARTESIA_API_KEY)
+        if (isValidCartesiaFormat(builtIn)) return builtIn
+
+        return null
+    }
+
+    fun hasValidCartesiaKey(): Boolean = getActiveCartesiaApiKey() != null
+
+    fun isUsingCustomCartesiaKey(): Boolean {
+        val custom = sanitize(prefs.getString(KEY_CUSTOM_CARTESIA_API_KEY, null))
+        return isValidCartesiaFormat(custom)
+    }
+
+    fun hasBuiltInCartesiaKey(): Boolean {
+        val builtIn = sanitize(BuildConfig.CARTESIA_API_KEY)
+        return isValidCartesiaFormat(builtIn)
+    }
+
+    fun saveCustomCartesiaApiKey(rawKey: String) {
+        val cleaned = sanitize(rawKey)
+        prefs.edit().putString(KEY_CUSTOM_CARTESIA_API_KEY, cleaned).apply()
+    }
+
+    fun clearCustomCartesiaApiKey() {
+        prefs.edit().remove(KEY_CUSTOM_CARTESIA_API_KEY).apply()
+    }
+
+    fun getMaskedCartesiaKeyPreview(): String {
+        val key = getActiveCartesiaApiKey() ?: return "Not configured"
+        return maskKey(key)
+    }
+
+    private fun maskKey(key: String): String {
         return if (key.length > 10) {
             "${key.take(6)}••••••${key.takeLast(4)}"
         } else {
@@ -49,7 +91,9 @@ class ApiKeyManager(context: Context) {
     companion object {
         private const val PREFS_NAME = "voice_clone_api_prefs"
         private const val KEY_CUSTOM_API_KEY = "custom_gemini_api_key"
-        private const val PLACEHOLDER_KEY = "MY_GEMINI_API_KEY"
+        private const val KEY_CUSTOM_CARTESIA_API_KEY = "custom_cartesia_api_key"
+        private const val PLACEHOLDER_GEMINI_KEY = "MY_GEMINI_API_KEY"
+        private const val PLACEHOLDER_CARTESIA_KEY = "MY_CARTESIA_API_KEY"
 
         fun sanitize(raw: String?): String {
             if (raw.isNullOrBlank()) return ""
@@ -59,11 +103,21 @@ class ApiKeyManager(context: Context) {
                 .trim()
         }
 
-        fun isValidFormat(key: String): Boolean {
+        fun isValidFormat(key: String): Boolean = isValidGeminiFormat(key)
+
+        fun isValidGeminiFormat(key: String): Boolean {
             return key.isNotBlank() &&
-                !key.equals(PLACEHOLDER_KEY, ignoreCase = true) &&
+                !key.equals(PLACEHOLDER_GEMINI_KEY, ignoreCase = true) &&
                 !key.contains("YOUR_API_KEY", ignoreCase = true) &&
                 key.length >= 16
+        }
+
+        fun isValidCartesiaFormat(key: String): Boolean {
+            return key.isNotBlank() &&
+                !key.equals(PLACEHOLDER_CARTESIA_KEY, ignoreCase = true) &&
+                !key.contains("YOUR_CARTESIA", ignoreCase = true) &&
+                !key.contains("YOUR_API_KEY", ignoreCase = true) &&
+                key.length >= 12
         }
     }
 }

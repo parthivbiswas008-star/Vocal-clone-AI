@@ -30,6 +30,9 @@ interface VoiceDao {
     @Query("SELECT * FROM voice_profiles WHERE id = :id")
     suspend fun getVoiceProfileById(id: Int): VoiceProfileEntity?
 
+    @Query("UPDATE voice_profiles SET cartesiaVoiceId = :cartesiaVoiceId, cloneProvider = :cloneProvider WHERE id = :id")
+    suspend fun updateCartesiaVoiceId(id: Int, cartesiaVoiceId: String, cloneProvider: String = "cartesia")
+
     // Generated Audios
     @Query("SELECT * FROM generated_audios ORDER BY createdAt DESC")
     fun getAllGeneratedAudios(): Flow<List<GeneratedAudioEntity>>

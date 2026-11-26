@@ -49,6 +49,7 @@ fun HistoryScreen(
     val context = LocalContext.current
     val historyList by viewModel.generatedAudios.collectAsStateWithLifecycle()
     val userMessage by viewModel.userMessage.collectAsStateWithLifecycle()
+    val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
 
     // Global Player & Speed states
     val isPlaying by viewModel.isPlaying.collectAsStateWithLifecycle()
@@ -64,6 +65,9 @@ fun HistoryScreen(
         }
     }
 
+    val glowPrimary = CosmicViolet.copy(alpha = 0.13f)
+    val glowSecondary = CosmicCyan.copy(alpha = 0.12f)
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -71,14 +75,14 @@ fun HistoryScreen(
             .drawBehind {
                 drawCircle(
                     brush = Brush.radialGradient(
-                        colors = listOf(Color(0x189D4EDD), Color.Transparent),
+                        colors = listOf(glowPrimary, Color.Transparent),
                         center = Offset(size.width * 0.85f, size.height * 0.85f),
                         radius = size.width * 0.6f
                     )
                 )
                 drawCircle(
                     brush = Brush.radialGradient(
-                        colors = listOf(Color(0x1500F5D4), Color.Transparent),
+                        colors = listOf(glowSecondary, Color.Transparent),
                         center = Offset(size.width * 0.2f, size.height * 0.2f),
                         radius = size.width * 0.6f
                     )
@@ -201,6 +205,8 @@ fun HistoryScreen(
                         playPosition = if (isActiveTrack) playPosition else 0,
                         playDuration = if (isActiveTrack && playDuration > 0) playDuration else audio.durationMs.toInt(),
                         playbackSpeed = playbackSpeed,
+                        showWaveforms = appSettings.showWaveforms,
+                        compactMode = appSettings.compactCards,
                         onPlayClick = {
                             viewModel.playAudio(
                                 path = audio.audioPath,
@@ -239,6 +245,8 @@ fun LiquidGlassHistoryItem(
     playPosition: Int,
     playDuration: Int,
     playbackSpeed: Float,
+    showWaveforms: Boolean = true,
+    compactMode: Boolean = false,
     onPlayClick: () -> Unit,
     onSeekFraction: (Float) -> Unit,
     onDownloadClick: () -> Unit,
@@ -257,10 +265,14 @@ fun LiquidGlassHistoryItem(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(if (compactMode) 14.dp else 18.dp))
             .background(LiquidGlassSurface)
-            .border(1.dp, if (isPlaying) LiquidBorderBrush else SolidColor(LiquidGlassBorder), RoundedCornerShape(18.dp))
-            .padding(14.dp)
+            .border(
+                1.dp,
+                if (isPlaying) LiquidBorderBrush else SolidColor(LiquidGlassBorder),
+                RoundedCornerShape(if (compactMode) 14.dp else 18.dp)
+            )
+            .padding(if (compactMode) 10.dp else 14.dp)
     ) {
         Column {
             Row(
@@ -344,7 +356,7 @@ fun LiquidGlassHistoryItem(
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(if (compactMode) 6.dp else 10.dp))
 
             // Script Preview Box
             Box(
@@ -352,36 +364,72 @@ fun LiquidGlassHistoryItem(
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(10.dp))
                     .background(LiquidGlassSurfaceElevated)
-                    .padding(10.dp)
+                    .padding(if (compactMode) 8.dp else 10.dp)
             ) {
                 Text(
                     text = audio.text,
                     fontSize = 12.sp,
                     color = CosmicWhite.copy(alpha = 0.85f),
-                    maxLines = 2,
+                    maxLines = if (compactMode) 1 else 2,
                     overflow = TextOverflow.Ellipsis,
                     lineHeight = 17.sp
                 )
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(if (compactMode) 6.dp else 10.dp))
 
-            // Interactive Visual Waveform Display (tap or drag to seek)
-            AudioWaveformPlayerBar(
-                audioPath = audio.audioPath,
-                isActiveTrack = isActiveTrack,
-                isPlaying = isPlaying,
-                currentPositionMs = playPosition,
-                durationMs = playDuration,
-                onSeekFraction = onSeekFraction,
-                barCount = 50,
-                waveformHeight = 48.dp,
-                showTimeLabels = true,
-                speedLabel = if (isActiveTrack) "${playbackSpeed}x" else null,
-                testTagName = "history_waveform_${audio.id}"
-            )
+            // Interactive Visual Waveform Display (or compact seek Slider when disabled in Settings)
+            if (showWaveforms) {
+                AudioWaveformPlayerBar(
+                    audioPath = audio.audioPath,
+                    isActiveTrack = isActiveTrack,
+                    isPlaying = isPlaying,
+                    currentPositionMs = playPosition,
+                    durationMs = playDuration,
+                    onSeekFraction = onSeekFraction,
+                    barCount = 50,
+                    waveformHeight = if (compactMode) 40.dp else 48.dp,
+                    showTimeLabels = true,
+                    speedLabel = if (isActiveTrack) "${playbackSpeed}x" else null,
+                    testTagName = "history_waveform_${audio.id}"
+                )
+            } else {
+                val safeDur = playDuration.coerceAtLeast(1)
+                val progress = if (isActiveTrack) {
+                    (playPosition.toFloat() / safeDur.toFloat()).coerceIn(0f, 1f)
+                } else 0f
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Slider(
+                        value = progress,
+                        onValueChange = onSeekFraction,
+                        colors = SliderDefaults.colors(
+                            thumbColor = CosmicCyan,
+                            activeTrackColor = CosmicCyan,
+                            inactiveTrackColor = LiquidGlassBorder
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(26.dp)
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = formatAudioTime(if (isActiveTrack) playPosition else 0),
+                            fontSize = 10.sp,
+                            color = CosmicMutedText
+                        )
+                        Text(
+                            text = formatAudioTime(playDuration),
+                            fontSize = 10.sp,
+                            color = CosmicMutedText
+                        )
+                    }
+                }
+            }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(if (compactMode) 6.dp else 10.dp))
 
             // Action Buttons: Download to Internal Storage, Share, Delete
             Row(

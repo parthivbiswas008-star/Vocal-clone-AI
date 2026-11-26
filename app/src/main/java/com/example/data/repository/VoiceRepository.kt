@@ -4,6 +4,8 @@ import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.util.Base64
 import com.example.data.VoiceCatalog
+import com.example.data.api.CartesiaApiException
+import com.example.data.api.CartesiaVoiceClient
 import com.example.data.api.Content
 import com.example.data.api.GenerateContentRequest
 import com.example.data.api.GenerateContentResponse
@@ -61,6 +63,13 @@ class VoiceRepository(
     suspend fun deleteVoiceProfile(id: Int): String? = withContext(Dispatchers.IO) {
         val profile = voiceDao.getVoiceProfileById(id)
         val path = profile?.audioPath
+        val cartesiaId = profile?.cartesiaVoiceId
+        if (!cartesiaId.isNullOrBlank()) {
+            val cartesiaKey = apiKeyManager.getActiveCartesiaApiKey()
+            if (cartesiaKey != null) {
+                CartesiaVoiceClient.deleteClonedVoice(cartesiaKey, cartesiaId)
+            }
+        }
         if (path != null) {
             val file = File(path)
             if (file.exists()) {
@@ -69,6 +78,58 @@ class VoiceRepository(
         }
         voiceDao.deleteVoiceProfileById(id)
         path
+    }
+
+    suspend fun verifyCartesiaApiKey(rawKey: String): Result<String> {
+        return CartesiaVoiceClient.verifyApiKey(rawKey)
+    }
+
+    /**
+     * Creates a TRUE 1:1 neural voice clone on Cartesia AI directly from the user's audio/video sample.
+     * Returns the real Cartesia voice UUID.
+     */
+    suspend fun createCartesiaTrueClone(
+        audioFile: File,
+        mimeType: String,
+        voiceName: String,
+        description: String,
+        language: String
+    ): String {
+        val cartesiaKey = apiKeyManager.getActiveCartesiaApiKey()
+            ?: throw CartesiaApiException(
+                "Cartesia AI API key is not configured. Add your Cartesia key in Settings -> API Keys for 1:1 voice cloning.",
+                isAuthError = true
+            )
+        return CartesiaVoiceClient.cloneVoice(
+            context = context,
+            apiKey = cartesiaKey,
+            audioFile = audioFile,
+            mimeType = mimeType,
+            voiceName = voiceName,
+            description = description,
+            language = language
+        )
+    }
+
+    /**
+     * Upgrades an existing locally saved voice clone to a 1:1 Cartesia neural voice clone.
+     */
+    suspend fun upgradeProfileToCartesiaClone(profile: VoiceProfileEntity): String = withContext(Dispatchers.IO) {
+        val path = profile.audioPath
+            ?: throw CartesiaApiException("Original voice recording file is missing for this profile.")
+        val file = File(path)
+        if (!file.exists() || file.length() == 0L) {
+            throw CartesiaApiException("Original voice recording file could not be found on device.")
+        }
+        val cartesiaVoiceId = createCartesiaTrueClone(
+            audioFile = file,
+            mimeType = profile.audioMimeType,
+            voiceName = profile.name,
+            description = profile.description,
+            language = profile.language
+        )
+        voiceDao.updateCartesiaVoiceId(profile.id, cartesiaVoiceId, "cartesia")
+        cartesiaVoiceId
     }
 
     suspend fun deleteGeneratedAudio(id: Int): String? = withContext(Dispatchers.IO) {
@@ -238,40 +299,68 @@ class VoiceRepository(
      * Synthesizes a quick temporary audition clip right inside Clone Studio so the user
      * can A/B compare their real voice sample against the cloned match before saving.
      */
+    /**
+     * Generates a quick audition clip so the user can A/B compare their original voice sample
+     * against the cloned output BEFORE saving. Uses Cartesia Sonic-3 1:1 clone when available.
+     */
     suspend fun auditionVoiceClone(
-        analysis: VoiceAnalysisResult,
+        analysis: VoiceAnalysisResult?,
         chosenPrebuiltVoice: String,
         customAccent: String,
         eqProfile: String,
-        language: String
+        language: String,
+        cartesiaVoiceId: String? = null,
+        studioMasteringEnabled: Boolean = true
     ): File = withContext(Dispatchers.IO) {
-        val tempProfile = VoiceProfileEntity(
-            name = "Clone Preview",
-            gender = analysis.detectedGender,
-            accent = customAccent.ifBlank { analysis.detectedAccent },
-            audioPath = null,
-            isPrebuilt = false,
-            prebuiltCode = chosenPrebuiltVoice,
-            recordingLanguage = language,
-            pitchTone = analysis.pitchProfile,
-            detectedAccent = customAccent.ifBlank { analysis.detectedAccent },
-            language = language,
-            voiceTraits = analysis.timbreDescription,
-            estimatedAge = analysis.estimatedAge,
-            speakingCadence = analysis.speakingCadence,
-            eqProfile = eqProfile,
-            phoneticNotes = analysis.phoneticNotes
-        )
+        val cleanLang = normalizeLanguageName(language)
+        val auditionText = VoiceCatalog.cloneAuditionSentence(cleanLang)
 
-        val auditionText = VoiceCatalog.cloneAuditionSentence(language)
-        val (audioBytes, extension, _) = synthesizeAudioBytes(
-            text = auditionText,
-            voiceProfile = tempProfile,
-            cleanLanguage = normalizeLanguageName(language),
-            emotionStyle = "Natural Chat",
-            naturalBreaths = true,
-            ultraHumanMode = true
-        )
+        val cartesiaKey = apiKeyManager.getActiveCartesiaApiKey()
+        val (audioBytes, extension) = if (!cartesiaVoiceId.isNullOrBlank() && cartesiaKey != null) {
+            val rawWav = CartesiaVoiceClient.synthesizeSpeechWavBytes(
+                apiKey = cartesiaKey,
+                cartesiaVoiceId = cartesiaVoiceId,
+                text = auditionText,
+                language = cleanLang,
+                emotionStyle = "Natural Chat"
+            )
+            val finalWav = if (studioMasteringEnabled) {
+                ensureMasteredWavOrMp3(rawWav, "audio/wav", eqProfile.ifBlank { "balanced" })
+            } else {
+                rawWav
+            }
+            finalWav to "wav"
+        } else {
+            val safeAnalysis = analysis
+                ?: throw Exception("Please complete Voice DNA scan or add a Cartesia AI API key first.")
+            val tempProfile = VoiceProfileEntity(
+                name = "Clone Preview",
+                gender = safeAnalysis.detectedGender,
+                accent = customAccent.ifBlank { safeAnalysis.detectedAccent },
+                audioPath = null,
+                isPrebuilt = false,
+                prebuiltCode = chosenPrebuiltVoice,
+                recordingLanguage = cleanLang,
+                pitchTone = safeAnalysis.pitchProfile,
+                detectedAccent = customAccent.ifBlank { safeAnalysis.detectedAccent },
+                language = cleanLang,
+                voiceTraits = safeAnalysis.timbreDescription,
+                estimatedAge = safeAnalysis.estimatedAge,
+                speakingCadence = safeAnalysis.speakingCadence,
+                eqProfile = eqProfile,
+                phoneticNotes = safeAnalysis.phoneticNotes
+            )
+            val (bytes, ext, _) = synthesizeAudioBytes(
+                text = auditionText,
+                voiceProfile = tempProfile,
+                cleanLanguage = cleanLang,
+                emotionStyle = "Natural Chat",
+                naturalBreaths = true,
+                ultraHumanMode = true,
+                studioMasteringEnabled = studioMasteringEnabled
+            )
+            bytes to ext
+        }
 
         val outFile = File(context.cacheDir, "clone_audition_${System.currentTimeMillis()}.$extension")
         FileOutputStream(outFile).use { it.write(audioBytes) }
@@ -279,8 +368,10 @@ class VoiceRepository(
     }
 
     /**
-     * Generates lifelike, human-sounding speech using Gemini Pro/3.1 TTS models,
-     * rich organic performance cues (zero robotic pacing), and transparent studio WAV mastering.
+     * Generates lifelike, human-sounding speech.
+     * - For cloned voices with a Cartesia AI key (preferCartesiaCloning=true): uses Cartesia Sonic-3
+     *   true 1:1 zero-shot voice cloning (auto-cloning existing samples on the fly if needed!).
+     * - For studio characters or Gemini fallback: uses Gemini Pro/3.1 TTS models + studio mastering.
      */
     suspend fun generateSpeech(
         title: String,
@@ -289,18 +380,60 @@ class VoiceRepository(
         language: String,
         emotionStyle: String = "Natural Chat",
         naturalBreaths: Boolean = true,
-        ultraHumanMode: Boolean = true
+        ultraHumanMode: Boolean = true,
+        preferCartesiaCloning: Boolean = true,
+        studioMasteringEnabled: Boolean = true
     ): GeneratedAudioEntity = withContext(Dispatchers.IO) {
         val cleanLanguage = normalizeLanguageName(language)
+        val cartesiaKey = apiKeyManager.getActiveCartesiaApiKey()
 
-        val (finalAudioBytes, extension, mimeType) = synthesizeAudioBytes(
-            text = text.trim(),
-            voiceProfile = voiceProfile,
-            cleanLanguage = cleanLanguage,
-            emotionStyle = emotionStyle,
-            naturalBreaths = naturalBreaths,
-            ultraHumanMode = ultraHumanMode
-        )
+        var usedCartesiaTrueClone = false
+        val (finalAudioBytes, extension, mimeType) = if (!voiceProfile.isPrebuilt && preferCartesiaCloning && cartesiaKey != null) {
+            // Ensure we have a real Cartesia neural voice_id (auto-upgrades older clones seamlessly!)
+            val activeCartesiaVoiceId = voiceProfile.cartesiaVoiceId?.takeIf { it.isNotBlank() }
+                ?: if (!voiceProfile.audioPath.isNullOrBlank() && File(voiceProfile.audioPath).exists()) {
+                    upgradeProfileToCartesiaClone(voiceProfile)
+                } else {
+                    null
+                }
+
+            if (!activeCartesiaVoiceId.isNullOrBlank()) {
+                val rawWav = CartesiaVoiceClient.synthesizeSpeechWavBytes(
+                    apiKey = cartesiaKey,
+                    cartesiaVoiceId = activeCartesiaVoiceId,
+                    text = text.trim(),
+                    language = cleanLanguage,
+                    emotionStyle = emotionStyle
+                )
+                val mastered = if (studioMasteringEnabled) {
+                    ensureMasteredWavOrMp3(rawWav, "audio/wav", voiceProfile.eqProfile.ifBlank { "balanced" })
+                } else {
+                    rawWav
+                }
+                usedCartesiaTrueClone = true
+                Triple(mastered, "wav", "audio/wav")
+            } else {
+                synthesizeAudioBytes(
+                    text = text.trim(),
+                    voiceProfile = voiceProfile,
+                    cleanLanguage = cleanLanguage,
+                    emotionStyle = emotionStyle,
+                    naturalBreaths = naturalBreaths,
+                    ultraHumanMode = ultraHumanMode,
+                    studioMasteringEnabled = studioMasteringEnabled
+                )
+            }
+        } else {
+            synthesizeAudioBytes(
+                text = text.trim(),
+                voiceProfile = voiceProfile,
+                cleanLanguage = cleanLanguage,
+                emotionStyle = emotionStyle,
+                naturalBreaths = naturalBreaths,
+                ultraHumanMode = ultraHumanMode,
+                studioMasteringEnabled = studioMasteringEnabled
+            )
+        }
 
         val outputDir = File(context.filesDir, "generated_speech")
         if (!outputDir.exists()) {
@@ -315,6 +448,7 @@ class VoiceRepository(
         }
 
         val durationMs = extractDurationMs(outputFile, (finalAudioBytes.size - 44).coerceAtLeast(0), mimeType)
+        val effectivePitch = if (usedCartesiaTrueClone) 1.0f else voiceProfile.pitchCalibration.coerceIn(0.84f, 1.16f)
 
         val generatedAudio = GeneratedAudioEntity(
             title = title.trim().ifBlank { "${voiceProfile.name} - $cleanLanguage" },
@@ -324,7 +458,7 @@ class VoiceRepository(
             audioPath = outputFile.absolutePath,
             durationMs = durationMs,
             emotionStyle = emotionStyle,
-            pitchCalibration = voiceProfile.pitchCalibration.coerceIn(0.84f, 1.16f),
+            pitchCalibration = effectivePitch,
             createdAt = System.currentTimeMillis()
         )
 
@@ -338,7 +472,8 @@ class VoiceRepository(
         cleanLanguage: String,
         emotionStyle: String,
         naturalBreaths: Boolean,
-        ultraHumanMode: Boolean
+        ultraHumanMode: Boolean,
+        studioMasteringEnabled: Boolean = true
     ): Triple<ByteArray, String, String> {
         val apiKey = requireActiveApiKey()
         val voiceName = resolveValidPrebuiltVoice(voiceProfile)
@@ -436,7 +571,11 @@ class VoiceRepository(
 
         val decodedBytes = Base64.decode(base64Data, Base64.DEFAULT)
         val eqTone = voiceProfile.eqProfile.ifBlank { "warm" }
-        val finalAudioBytes = ensureMasteredWavOrMp3(decodedBytes, mimeType, eqTone)
+        val finalAudioBytes = if (studioMasteringEnabled) {
+            ensureMasteredWavOrMp3(decodedBytes, mimeType, eqTone)
+        } else {
+            ensureRawWavOrMp3(decodedBytes, mimeType)
+        }
 
         val isMp3 = mimeType.contains("mp3", ignoreCase = true) || mimeType.contains("mpeg", ignoreCase = true)
         val extension = if (isMp3) "mp3" else "wav"
@@ -736,6 +875,23 @@ class VoiceRepository(
         val channels = parseChannels(mimeType)
         val masteredPcm = AudioMasteringEngine.masterPcm16(audioBytes, sampleRate, channels, eqProfile)
         return buildWavHeader(masteredPcm.size, sampleRate, channels, 16) + masteredPcm
+    }
+
+    private fun ensureRawWavOrMp3(audioBytes: ByteArray, mimeType: String): ByteArray {
+        if (audioBytes.size > 44 &&
+            audioBytes[0] == 'R'.code.toByte() &&
+            audioBytes[1] == 'I'.code.toByte() &&
+            audioBytes[2] == 'F'.code.toByte() &&
+            audioBytes[3] == 'F'.code.toByte()
+        ) {
+            return audioBytes
+        }
+        if (mimeType.contains("mp3", ignoreCase = true) || mimeType.contains("mpeg", ignoreCase = true)) {
+            return audioBytes
+        }
+        val sampleRate = parseSampleRate(mimeType)
+        val channels = parseChannels(mimeType)
+        return buildWavHeader(audioBytes.size, sampleRate, channels, 16) + audioBytes
     }
 
     private fun buildWavHeader(totalDataLen: Int, sampleRate: Int, channels: Int, bitsPerSample: Int): ByteArray {

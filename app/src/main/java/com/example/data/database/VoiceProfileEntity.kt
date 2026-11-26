@@ -27,5 +27,7 @@ data class VoiceProfileEntity(
     val eqProfile: String = "warm",
     val phoneticNotes: String = "",
     val secondaryPrebuiltCode: String? = null,
+    val cartesiaVoiceId: String? = null,
+    val cloneProvider: String = "gemini",
     val createdAt: Long = System.currentTimeMillis()
 )

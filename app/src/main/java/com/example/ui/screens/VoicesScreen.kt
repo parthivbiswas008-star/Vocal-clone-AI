@@ -47,6 +47,7 @@ import com.example.data.database.VoiceProfileEntity
 import com.example.data.repository.VoiceAnalysisResult
 import com.example.ui.components.AudioWaveformPlayerBar
 import com.example.ui.theme.*
+import com.example.ui.viewmodel.ApiKeyDialogTab
 import com.example.ui.viewmodel.VoiceViewModel
 import java.util.Locale
 
@@ -65,6 +66,11 @@ fun VoicesScreen(
 ) {
     val context = LocalContext.current
     val voiceProfiles by viewModel.voiceProfiles.collectAsStateWithLifecycle()
+    val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
+    val hasCartesiaApiKey by viewModel.hasCartesiaApiKey.collectAsStateWithLifecycle()
+    val tempCartesiaVoiceId by viewModel.tempCartesiaVoiceId.collectAsStateWithLifecycle()
+    val isCreatingClone by viewModel.isCreatingClone.collectAsStateWithLifecycle()
+    val upgradingProfileId by viewModel.upgradingProfileId.collectAsStateWithLifecycle()
 
     // Live recording & upload states
     val isRecording by viewModel.isRecording.collectAsStateWithLifecycle()
@@ -167,6 +173,9 @@ fun VoicesScreen(
         }
     }
 
+    val glowPrimary = CosmicCyan.copy(alpha = 0.13f)
+    val glowSecondary = CosmicViolet.copy(alpha = 0.11f)
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -174,14 +183,14 @@ fun VoicesScreen(
             .drawBehind {
                 drawCircle(
                     brush = Brush.radialGradient(
-                        colors = listOf(Color(0x1800F5D4), Color.Transparent),
+                        colors = listOf(glowPrimary, Color.Transparent),
                         center = Offset(size.width * 0.85f, size.height * 0.15f),
                         radius = size.width * 0.6f
                     )
                 )
                 drawCircle(
                     brush = Brush.radialGradient(
-                        colors = listOf(Color(0x159D4EDD), Color.Transparent),
+                        colors = listOf(glowSecondary, Color.Transparent),
                         center = Offset(size.width * 0.15f, size.height * 0.75f),
                         radius = size.width * 0.7f
                     )
@@ -364,6 +373,9 @@ fun VoicesScreen(
                         isPlayingSample = isPlaying && isSampleActive,
                         playPositionMs = if (isSampleActive) playPosition else 0,
                         playDurationMs = if (isSampleActive) playDuration else 0,
+                        showWaveforms = appSettings.showWaveforms,
+                        isUpgradingToCartesia = upgradingProfileId == profile.id,
+                        onUpgradeToCartesia = { viewModel.upgradeExistingCloneToCartesia(profile) },
                         onUseClick = { onUseVoiceInStudio(profile.id) },
                         onPlaySample = {
                             profile.audioPath?.let { viewModel.playAudio(it, useCustomSpeed = false) }
@@ -440,6 +452,79 @@ fun VoicesScreen(
                         .heightIn(max = 580.dp)
                         .verticalScroll(rememberScrollState())
                 ) {
+                    val isCartesiaCloneActive = hasCartesiaApiKey && appSettings.preferCartesiaCloning
+
+                    // Cartesia AI True 1:1 Cloning Status / Setup Banner
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(
+                                if (isCartesiaCloneActive) CosmicCyan.copy(alpha = 0.14f)
+                                else CosmicViolet.copy(alpha = 0.18f)
+                            )
+                            .border(
+                                1.dp,
+                                if (isCartesiaCloneActive) CosmicCyan.copy(alpha = 0.7f)
+                                else CosmicViolet.copy(alpha = 0.75f),
+                                RoundedCornerShape(14.dp)
+                            )
+                            .clickable { viewModel.openApiKeyDialog(ApiKeyDialogTab.CARTESIA) }
+                            .padding(horizontal = 12.dp, vertical = 9.dp)
+                            .testTag("clone_cartesia_status_banner")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = if (isCartesiaCloneActive) Icons.Default.Verified else Icons.Default.RecordVoiceOver,
+                                    contentDescription = null,
+                                    tint = CosmicCyan,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = if (isCartesiaCloneActive) {
+                                            "Cartesia Sonic-3 1:1 True Cloning Active"
+                                        } else {
+                                            "Want 100% Identical 1:1 Voice Cloning?"
+                                        },
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isCartesiaCloneActive) CosmicCyan else CosmicWhite
+                                    )
+                                    Text(
+                                        text = if (isCartesiaCloneActive) {
+                                            "Clones your exact voice timbre, pitch & accent identically!"
+                                        } else {
+                                            "Tap here to add your Cartesia AI API key for exact voice cloning"
+                                        },
+                                        fontSize = 10.sp,
+                                        color = CosmicMutedText,
+                                        lineHeight = 13.sp
+                                    )
+                                }
+                            }
+                            if (!isCartesiaCloneActive) {
+                                Icon(
+                                    imageVector = Icons.Default.ChevronRight,
+                                    contentDescription = "Add Cartesia API Key",
+                                    tint = CosmicCyan,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
                     // 1. Voice Name
                     Text("Voice Name", color = CosmicCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     OutlinedTextField(
@@ -788,26 +873,28 @@ fun VoicesScreen(
                         val isSampleActive = playingPath == samplePath
                         val previewPlaying = isPlaying && isSampleActive
 
-                        Spacer(modifier = Modifier.height(10.dp))
-                        AudioWaveformPlayerBar(
-                            audioPath = samplePath,
-                            isActiveTrack = isSampleActive,
-                            isPlaying = previewPlaying,
-                            currentPositionMs = if (isSampleActive) playPosition else 0,
-                            durationMs = if (isSampleActive) playDuration else 0,
-                            onSeekFraction = { fraction ->
-                                viewModel.seekAudioFraction(
-                                    path = samplePath,
-                                    fraction = fraction,
-                                    useCustomSpeed = false,
-                                    pitchCalibration = 1.0f
-                                )
-                            },
-                            barCount = 48,
-                            waveformHeight = 48.dp,
-                            showTimeLabels = isSampleActive,
-                            testTagName = "clone_sample_waveform"
-                        )
+                        if (appSettings.showWaveforms) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            AudioWaveformPlayerBar(
+                                audioPath = samplePath,
+                                isActiveTrack = isSampleActive,
+                                isPlaying = previewPlaying,
+                                currentPositionMs = if (isSampleActive) playPosition else 0,
+                                durationMs = if (isSampleActive) playDuration else 0,
+                                onSeekFraction = { fraction ->
+                                    viewModel.seekAudioFraction(
+                                        path = samplePath,
+                                        fraction = fraction,
+                                        useCustomSpeed = false,
+                                        pitchCalibration = 1.0f
+                                    )
+                                },
+                                barCount = 48,
+                                waveformHeight = 48.dp,
+                                showTimeLabels = isSampleActive,
+                                testTagName = "clone_sample_waveform"
+                            )
+                        }
 
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(
@@ -902,11 +989,15 @@ fun VoicesScreen(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(10.dp))
                                         .background(CosmicCyan)
-                                        .clickable { viewModel.openApiKeyDialog() }
+                                        .clickable {
+                                            viewModel.openApiKeyDialog(
+                                                if (!hasCartesiaApiKey) ApiKeyDialogTab.CARTESIA else ApiKeyDialogTab.GEMINI
+                                            )
+                                        }
                                         .padding(horizontal = 12.dp, vertical = 6.dp)
                                 ) {
                                     Text(
-                                        text = "Configure Gemini API Key",
+                                        text = "Configure API Keys",
                                         color = DeepSpaceBackground,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold
@@ -925,6 +1016,8 @@ fun VoicesScreen(
                         val isAuditionActive = auditionPath != null && playingPath == auditionPath
                         CloneCalibrationPanel(
                             analysis = analysis,
+                            isCartesiaActive = hasCartesiaApiKey && appSettings.preferCartesiaCloning,
+                            showWaveforms = appSettings.showWaveforms,
                             selectedBaseVoice = selectedBaseVoice.ifBlank { analysis.bestMatchingPrebuiltVoice },
                             onSelectBaseVoice = { selectedBaseVoice = it },
                             pitchCalibration = pitchCalibration,
@@ -941,6 +1034,7 @@ fun VoicesScreen(
                             auditionError = auditionError,
                             onRunAudition = {
                                 viewModel.runCloneAudition(
+                                    voiceName = newVoiceName,
                                     chosenBaseVoice = selectedBaseVoice.ifBlank { analysis.bestMatchingPrebuiltVoice },
                                     customAccent = customAccentOverride,
                                     eqProfile = selectedEqProfile,
@@ -957,11 +1051,139 @@ fun VoicesScreen(
                                         path = path,
                                         fraction = fraction,
                                         useCustomSpeed = false,
-                                        pitchCalibration = pitchCalibration
+                                        pitchCalibration = if (!tempCartesiaVoiceId.isNullOrBlank()) 1.0f else pitchCalibration
                                     )
                                 }
                             }
                         )
+                    } else if (tempSampleFile != null && !isRecording && hasCartesiaApiKey && appSettings.preferCartesiaCloning) {
+                        // Direct Cartesia 1:1 Audition Panel (works without requiring Gemini API key!)
+                        val auditionPath = auditionAudioFile?.absolutePath
+                        val isAuditionActive = auditionPath != null && playingPath == auditionPath
+                        val isPlayingAudition = isPlaying && isAuditionActive
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(LiquidGlassSurfaceElevated)
+                                .border(1.dp, CosmicCyan.copy(alpha = 0.55f), RoundedCornerShape(14.dp))
+                                .padding(12.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Verified, contentDescription = null, tint = CosmicCyan, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (!tempCartesiaVoiceId.isNullOrBlank()) {
+                                        "1:1 Cartesia Voice Cloned & Ready!"
+                                    } else {
+                                        "Ready for True 1:1 Cartesia Cloning"
+                                    },
+                                    color = CosmicCyan,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Test how identically your voice sounds before saving.",
+                                color = CosmicMutedText,
+                                fontSize = 10.sp
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1.2f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(if (isAuditioningClone) LiquidGlassSurface else CosmicViolet.copy(alpha = 0.85f))
+                                        .border(1.dp, CosmicCyan.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+                                        .clickable(enabled = !isAuditioningClone) {
+                                            viewModel.runCloneAudition(
+                                                voiceName = newVoiceName,
+                                                chosenBaseVoice = "Charon",
+                                                customAccent = customAccentOverride,
+                                                eqProfile = selectedEqProfile,
+                                                pitchCalibration = 1.0f,
+                                                hintLanguage = selectedHintLanguage
+                                            )
+                                        }
+                                        .padding(vertical = 9.dp)
+                                        .testTag("test_cartesia_clone_button"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isAuditioningClone) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            CircularProgressIndicator(color = CosmicCyan, strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Cloning & Testing...", color = CosmicCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    } else {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.Hearing, contentDescription = null, tint = CosmicWhite, modifier = Modifier.size(15.dp))
+                                            Spacer(modifier = Modifier.width(5.dp))
+                                            Text("Test 1:1 Cartesia Clone", color = CosmicWhite, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                                if (auditionPath != null) {
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(0.9f)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(if (isPlayingAudition) CosmicCyan else CosmicCyan.copy(alpha = 0.16f))
+                                            .border(1.dp, CosmicCyan, RoundedCornerShape(12.dp))
+                                            .clickable { viewModel.playAuditionClip(1.0f) }
+                                            .padding(vertical = 9.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                imageVector = if (isPlayingAudition) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                                contentDescription = "Play 1:1 Clone Test",
+                                                tint = if (isPlayingAudition) DeepSpaceBackground else CosmicCyan,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = if (isPlayingAudition) "Playing" else "Play",
+                                                color = if (isPlayingAudition) DeepSpaceBackground else CosmicCyan,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            if (auditionPath != null && appSettings.showWaveforms) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                AudioWaveformPlayerBar(
+                                    audioPath = auditionPath,
+                                    isActiveTrack = isAuditionActive,
+                                    isPlaying = isPlayingAudition,
+                                    currentPositionMs = if (isAuditionActive) playPosition else 0,
+                                    durationMs = if (isAuditionActive) playDuration else 0,
+                                    onSeekFraction = { fraction ->
+                                        viewModel.seekAudioFraction(
+                                            path = auditionPath,
+                                            fraction = fraction,
+                                            useCustomSpeed = false,
+                                            pitchCalibration = 1.0f
+                                        )
+                                    },
+                                    barCount = 44,
+                                    waveformHeight = 46.dp,
+                                    showTimeLabels = isAuditionActive,
+                                    testTagName = "cartesia_audition_waveform"
+                                )
+                            }
+                            if (!auditionError.isNullOrBlank()) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(text = auditionError!!, color = SignalRed, fontSize = 10.sp)
+                            }
+                        }
                     }
 
                     // Editable Detected Accent & Optional Bio
@@ -1010,7 +1232,9 @@ fun VoicesScreen(
 
                         Spacer(modifier = Modifier.height(14.dp))
 
-                        val canSaveClone = !isAnalyzingVoice && !isAuditioningClone && voiceAnalysis != null
+                        val cartesiaReady = hasCartesiaApiKey && appSettings.preferCartesiaCloning
+                        val canSaveClone = !isAnalyzingVoice && !isAuditioningClone && !isCreatingClone &&
+                            (voiceAnalysis != null || cartesiaReady)
                         // Save Voice Clone Button
                         Box(
                             modifier = Modifier
@@ -1023,9 +1247,13 @@ fun VoicesScreen(
                                     if (canSaveClone) CosmicCyan else LiquidGlassBorder,
                                     RoundedCornerShape(14.dp)
                                 )
-                                .clickable(enabled = !isAnalyzingVoice && !isAuditioningClone) {
-                                    if (voiceAnalysis == null) {
-                                        Toast.makeText(context, "Tap 'Re-Scan AI' first so Voice DNA analysis succeeds before saving.", Toast.LENGTH_LONG).show()
+                                .clickable(enabled = !isAnalyzingVoice && !isAuditioningClone && !isCreatingClone) {
+                                    if (voiceAnalysis == null && !cartesiaReady) {
+                                        Toast.makeText(
+                                            context,
+                                            "Add a Cartesia AI key for 1:1 cloning, or tap 'Re-Scan AI' with Gemini first.",
+                                            Toast.LENGTH_LONG
+                                        ).show()
                                         return@clickable
                                     }
                                     if (newVoiceName.isBlank()) {
@@ -1043,27 +1271,53 @@ fun VoicesScreen(
                                         eqProfile = selectedEqProfile
                                     ) { newId ->
                                         showCloneDialog = false
-                                        Toast.makeText(context, "Voice clone calibrated and selected!", Toast.LENGTH_SHORT).show()
+                                        val msg = if (cartesiaReady) {
+                                            "1:1 Cartesia voice clone created & selected!"
+                                        } else {
+                                            "Voice clone calibrated and selected!"
+                                        }
+                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                                         onUseVoiceInStudio(newId)
                                     }
                                 }
                                 .testTag("save_clone_button"),
                             contentAlignment = Alignment.Center
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = if (canSaveClone) Icons.Default.Check else Icons.Default.HourglassTop,
-                                    contentDescription = null,
-                                    tint = if (canSaveClone) DeepSpaceBackground else CosmicMutedText,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = if (canSaveClone) "Save & Use Calibrated Clone" else "Complete AI Voice Scan First",
-                                    color = if (canSaveClone) DeepSpaceBackground else CosmicMutedText,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp
-                                )
+                            if (isCreatingClone) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(
+                                        color = CosmicCyan,
+                                        strokeWidth = 2.dp,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = if (cartesiaReady) "Cloning Exact Voice on Cartesia..." else "Saving Voice Clone...",
+                                        color = CosmicCyan,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            } else {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = if (canSaveClone) Icons.Default.Check else Icons.Default.HourglassTop,
+                                        contentDescription = null,
+                                        tint = if (canSaveClone) DeepSpaceBackground else CosmicMutedText,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = when {
+                                            canSaveClone && cartesiaReady -> "Save & Use 1:1 Exact Clone"
+                                            canSaveClone -> "Save & Use Calibrated Clone"
+                                            else -> "Add Cartesia Key or Scan AI First"
+                                        },
+                                        color = if (canSaveClone) DeepSpaceBackground else CosmicMutedText,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp
+                                    )
+                                }
                             }
                         }
                     }
@@ -1174,6 +1428,8 @@ private fun AccentDetectionResultCard(
 @Composable
 private fun CloneCalibrationPanel(
     analysis: VoiceAnalysisResult,
+    isCartesiaActive: Boolean,
+    showWaveforms: Boolean,
     selectedBaseVoice: String,
     onSelectBaseVoice: (String) -> Unit,
     pitchCalibration: Float,
@@ -1393,7 +1649,12 @@ private fun CloneCalibrationPanel(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Hearing, contentDescription = "Test Clone Match", tint = CosmicWhite, modifier = Modifier.size(15.dp))
                             Spacer(modifier = Modifier.width(5.dp))
-                            Text("Test Clone Match", color = CosmicWhite, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                text = if (isCartesiaActive) "Test 1:1 Cartesia Clone" else "Test Clone Match",
+                                color = CosmicWhite,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
                 }
@@ -1429,7 +1690,7 @@ private fun CloneCalibrationPanel(
                 }
             }
 
-            if (auditionPath != null) {
+            if (auditionPath != null && showWaveforms) {
                 Spacer(modifier = Modifier.height(8.dp))
                 AudioWaveformPlayerBar(
                     audioPath = auditionPath,
@@ -1478,6 +1739,9 @@ private fun CharacterVoiceCard(
     isPlayingSample: Boolean,
     playPositionMs: Int,
     playDurationMs: Int,
+    showWaveforms: Boolean,
+    isUpgradingToCartesia: Boolean,
+    onUpgradeToCartesia: () -> Unit,
     onUseClick: () -> Unit,
     onPlaySample: () -> Unit,
     onSeekSampleFraction: (Float) -> Unit,
@@ -1485,6 +1749,7 @@ private fun CharacterVoiceCard(
     modifier: Modifier = Modifier
 ) {
     val langFlag = VoiceCatalog.flagForLanguage(profile.language)
+    val isCartesiaClone = !profile.isPrebuilt && !profile.cartesiaVoiceId.isNullOrBlank()
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -1533,7 +1798,8 @@ private fun CharacterVoiceCard(
                                 fontWeight = FontWeight.Bold,
                                 color = CosmicWhite,
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Box(
@@ -1543,7 +1809,11 @@ private fun CharacterVoiceCard(
                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                             ) {
                                 Text(
-                                    text = if (!profile.isPrebuilt) "$langFlag CLONE" else "$langFlag ${profile.language.uppercase()}",
+                                    text = when {
+                                        isCartesiaClone -> "$langFlag 1:1 CARTESIA"
+                                        !profile.isPrebuilt -> "$langFlag CLONE"
+                                        else -> "$langFlag ${profile.language.uppercase()}"
+                                    },
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = if (!profile.isPrebuilt) CosmicCyan else CosmicWhite
@@ -1553,15 +1823,19 @@ private fun CharacterVoiceCard(
 
                         Spacer(modifier = Modifier.height(2.dp))
 
-                        val cloneCal = if (!profile.isPrebuilt) {
-                            val pct = kotlin.math.round((profile.pitchCalibration - 1.0f) * 100f).toInt()
-                            val pctStr = when {
-                                pct > 0 -> "+${pct}%"
-                                pct < 0 -> "${pct}%"
-                                else -> "0%"
+                        val cloneCal = when {
+                            isCartesiaClone -> " • Sonic-3 Exact Match"
+                            !profile.isPrebuilt -> {
+                                val pct = kotlin.math.round((profile.pitchCalibration - 1.0f) * 100f).toInt()
+                                val pctStr = when {
+                                    pct > 0 -> "+${pct}%"
+                                    pct < 0 -> "${pct}%"
+                                    else -> "0%"
+                                }
+                                " • ${profile.eqProfile.replaceFirstChar { it.uppercase() }} ($pctStr)"
                             }
-                            " • ${profile.eqProfile.replaceFirstChar { it.uppercase() }} ($pctStr)"
-                        } else ""
+                            else -> ""
+                        }
                         Text(
                             text = "${profile.gender} • ${profile.detectedAccent ?: profile.accent} • ${profile.pitchTone}$cloneCal",
                             fontSize = 11.sp,
@@ -1591,7 +1865,7 @@ private fun CharacterVoiceCard(
                 )
             }
 
-            if (!profile.isPrebuilt && profile.audioPath != null) {
+            if (showWaveforms && !profile.isPrebuilt && profile.audioPath != null) {
                 Spacer(modifier = Modifier.height(8.dp))
                 AudioWaveformPlayerBar(
                     audioPath = profile.audioPath,
@@ -1605,6 +1879,46 @@ private fun CharacterVoiceCard(
                     showTimeLabels = isSampleActive,
                     testTagName = "voice_clone_waveform_${profile.id}"
                 )
+            }
+
+            // One-tap upgrade for older non-Cartesia clones
+            if (!profile.isPrebuilt && !isCartesiaClone && profile.audioPath != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(CosmicViolet.copy(alpha = 0.2f))
+                        .border(1.dp, CosmicCyan.copy(alpha = 0.55f), RoundedCornerShape(10.dp))
+                        .clickable(enabled = !isUpgradingToCartesia) { onUpgradeToCartesia() }
+                        .padding(horizontal = 10.dp, vertical = 7.dp)
+                        .testTag("upgrade_cartesia_clone_${profile.id}"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isUpgradingToCartesia) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(color = CosmicCyan, strokeWidth = 2.dp, modifier = Modifier.size(13.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Upgrading to 1:1 Cartesia Clone...",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = CosmicCyan
+                            )
+                        }
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = CosmicCyan, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Upgrade to 1:1 Exact Cartesia Clone",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = CosmicCyan
+                            )
+                        }
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
