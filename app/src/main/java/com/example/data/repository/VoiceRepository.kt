@@ -21,6 +21,7 @@ import com.example.data.database.VoiceDao
 import com.example.data.database.VoiceProfileEntity
 import com.example.util.ApiKeyManager
 import com.example.util.AudioMasteringEngine
+import com.example.util.MediaAudioTranscoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -206,93 +207,136 @@ class VoiceRepository(
             throw Exception("Voice sample file is empty or could not be found.")
         }
 
-        val audioBytes = audioFile.readBytes()
-        val audioBase64 = Base64.encodeToString(audioBytes, Base64.NO_WRAP)
-        val safeMime = normalizeMediaMimeType(mimeType, audioFile.extension)
+        // Gemini REST API strictly rejects "audio/mp4" (M4A live recordings), "audio/amr", "audio/3gpp",
+        // and oversized inline payloads with HTTP 400. Always transcode non-native or large files into
+        // a crisp, compact 16-bit mono PCM WAV (audio/wav, <=25s @ <=24kHz) so Gemini accepts 100% of clips.
+        val ext = audioFile.extension.lowercase()
+        val isNativeGeminiAudio = ext in setOf("wav", "mp3", "ogg", "flac", "aac") &&
+            audioFile.length() <= 6L * 1024L * 1024L
 
-        val voiceDirectoryText = VoiceCatalog.officialGeminiVoices.entries.joinToString("\n") { (name, desc) ->
-            "- $name: $desc"
-        }
-
-        val analysisPrompt = """
-            You are a world-class forensic acoustic phonetician and voice-cloning casting director.
-            Listen deeply to the human speaker in the attached media clip (user language hint: "$hintLanguage", but report the ACTUAL language spoken).
-            Ignore background hiss or room reverb and focus strictly on the speaker's vocal cords, formant timbre, fundamental pitch, regional accent, breathing habits, and natural human cadence.
-
-            Available base vocal timbres (choose the TOP 2 closest acoustic matches strictly matching the speaker's gender):
-            $voiceDirectoryText
-
-            Return ONLY a valid JSON object with these exact keys:
-            {
-              "detectedLanguage": "Primary spoken language (e.g., English, Bengali, Hindi, Spanish, French, Arabic, German, Japanese, Urdu, etc.)",
-              "detectedAccent": "Exact regional accent (e.g., Kolkata Bengali, Dhaka Bangladeshi Bengali, North Indian Hindi, Indian English, General American, British RP, etc.)",
-              "detectedGender": "Male or Female",
-              "estimatedAge": "e.g., Teen/Young Adult (18-24), Young Adult (25-32), Adult (33-45), Mature (46+)",
-              "pitchProfile": "Exact vocal pitch & register (e.g., Deep Chest Baritone, Warm Mid-Baritone, Smooth Tenor, Bright Youthful Tenor, Rich Warm Alto, Soft Mezzo-Soprano, Crisp Soprano)",
-              "speakingCadence": "Specific natural phrasing rhythm, breath pauses, and sentence-ending melody",
-              "timbreDescription": "Detailed 2-3 sentence pure acoustic portrait of chest vs head resonance, breathiness, vocal rasp/smoothness, warmth, and emotional color so a voice actor can convincingly mirror this person",
-              "phoneticNotes": "Concrete pronunciation habits: vowel rounding, aspirated/dental/retroflex consonants, syllable stress, and native inflection patterns",
-              "bestMatchingPrebuiltVoice": "Exact name of #1 closest voice from the 30 voices above (MUST match detectedGender)",
-              "secondaryMatchingPrebuiltVoice": "Exact name of #2 closest alternative voice from the 30 voices above (different from #1, MUST match detectedGender)",
-              "recommendedPitchShift": 1.0,
-              "eqProfile": "One of: warm, deep, balanced, bright, intimate",
-              "sampleQualityNote": "Short 5-8 word note on recording clarity (e.g., Clean studio-grade vocal sample, or Mild room echo detected)",
-              "confidenceScore": 94
-            }
-
-            Guidance for recommendedPitchShift:
-            - Must be a float between 0.90 and 1.10 representing the subtle pitch adjustment needed on top of bestMatchingPrebuiltVoice to match the speaker's real pitch center (e.g., 0.94 if speaker is slightly deeper than the base voice, 1.05 if slightly higher, 1.00 if exact match).
-        """.trimIndent()
-
-        val request = GenerateContentRequest(
-            contents = listOf(
-                Content(
-                    parts = listOf(
-                        Part(text = analysisPrompt),
-                        Part(inlineData = InlineData(mimeType = safeMime, data = audioBase64))
-                    )
-                )
-            ),
-            generationConfig = GenerationConfig(
-                temperature = 0.15f,
-                responseMimeType = "application/json"
+        var transcodedTemp: File? = null
+        val (uploadFile, safeMime) = if (isNativeGeminiAudio) {
+            audioFile to normalizeGeminiMimeType(mimeType, ext)
+        } else {
+            val wav = MediaAudioTranscoder.transcodeToMonoWav(
+                context = context,
+                sourceFile = audioFile,
+                filePrefix = "gemini_clean_clip_",
+                maxDurationSeconds = 25,
+                maxOutputSampleRate = 24000
             )
-        )
-
-        val analyzerModels = listOf(
-            "gemini-2.5-flash",
-            "gemini-3.8-flash",
-            "gemini-2.5-flash-lite"
-        )
-        var lastError: Exception? = null
-        var rawText: String? = null
-
-        for (model in analyzerModels) {
-            try {
-                val resp = RetrofitClient.service.generateContent(model, apiKey, request)
-                val text = resp.candidates?.firstOrNull()?.content?.parts?.firstOrNull { !it.text.isNullOrBlank() }?.text
-                if (!text.isNullOrBlank()) {
-                    rawText = text
-                    break
-                }
-            } catch (e: retrofit2.HttpException) {
-                val errBody = try { e.response()?.errorBody()?.string() } catch (_: Exception) { null }
-                val msg = parseErrorMessage(errBody) ?: e.message()
-                if (isApiKeyAuthError(e.code(), msg, errBody)) {
-                    throw ApiKeyException("Invalid or unauthorized Gemini API key: $msg. Tap the API Key button to update it.")
-                }
-                lastError = Exception("Voice analysis failed ($model: HTTP ${e.code()}): $msg")
-                continue
-            } catch (e: Exception) {
-                lastError = e
+            if (wav != null && wav.exists() && wav.length() > 1000L) {
+                transcodedTemp = wav
+                wav to "audio/wav"
+            } else {
+                // Fallback: NEVER send "audio/mp4" to Gemini; use "video/mp4" for MP4/M4A containers
+                audioFile to normalizeGeminiMimeType(mimeType, ext)
             }
         }
 
-        if (rawText.isNullOrBlank()) {
-            throw lastError ?: Exception("Unable to analyze the voice sample. Please try a clearer recording or audio/video file.")
-        }
+        try {
+            val audioBytes = uploadFile.readBytes()
+            val audioBase64 = Base64.encodeToString(audioBytes, Base64.NO_WRAP)
 
-        parseVoiceAnalysisJson(rawText, hintLanguage)
+            val voiceDirectoryText = VoiceCatalog.officialGeminiVoices.entries.joinToString("\n") { (name, desc) ->
+                "- $name: $desc"
+            }
+
+            val analysisPrompt = """
+                You are a world-class forensic acoustic phonetician and voice-cloning casting director.
+                Listen deeply to the human speaker in the attached media clip (user language hint: "$hintLanguage", but report the ACTUAL language spoken).
+                Ignore background hiss or room reverb and focus strictly on the speaker's vocal cords, formant timbre, fundamental pitch, regional accent, breathing habits, and natural human cadence.
+
+                Available base vocal timbres (choose the TOP 2 closest acoustic matches strictly matching the speaker's gender):
+                $voiceDirectoryText
+
+                Return ONLY a valid JSON object with these exact keys:
+                {
+                  "detectedLanguage": "Primary spoken language (e.g., English, Bengali, Hindi, Spanish, French, Arabic, German, Japanese, Urdu, etc.)",
+                  "detectedAccent": "Exact regional accent (e.g., Kolkata Bengali, Dhaka Bangladeshi Bengali, North Indian Hindi, Indian English, General American, British RP, etc.)",
+                  "detectedGender": "Male or Female",
+                  "estimatedAge": "e.g., Teen/Young Adult (18-24), Young Adult (25-32), Adult (33-45), Mature (46+)",
+                  "pitchProfile": "Exact vocal pitch & register (e.g., Deep Chest Baritone, Warm Mid-Baritone, Smooth Tenor, Bright Youthful Tenor, Rich Warm Alto, Soft Mezzo-Soprano, Crisp Soprano)",
+                  "speakingCadence": "Specific natural phrasing rhythm, breath pauses, and sentence-ending melody",
+                  "timbreDescription": "Detailed 2-3 sentence pure acoustic portrait of chest vs head resonance, breathiness, vocal rasp/smoothness, warmth, and emotional color so a voice actor can convincingly mirror this person",
+                  "phoneticNotes": "Concrete pronunciation habits: vowel rounding, aspirated/dental/retroflex consonants, syllable stress, and native inflection patterns",
+                  "bestMatchingPrebuiltVoice": "Exact name of #1 closest voice from the 30 voices above (MUST match detectedGender)",
+                  "secondaryMatchingPrebuiltVoice": "Exact name of #2 closest alternative voice from the 30 voices above (different from #1, MUST match detectedGender)",
+                  "recommendedPitchShift": 1.0,
+                  "eqProfile": "One of: warm, deep, balanced, bright, intimate",
+                  "sampleQualityNote": "Short 5-8 word note on recording clarity (e.g., Clean studio-grade vocal sample, or Mild room echo detected)",
+                  "confidenceScore": 94
+                }
+
+                Guidance for recommendedPitchShift:
+                - Must be a float between 0.90 and 1.10 representing the subtle pitch adjustment needed on top of bestMatchingPrebuiltVoice to match the speaker's real pitch center (e.g., 0.94 if speaker is slightly deeper than the base voice, 1.05 if slightly higher, 1.00 if exact match).
+            """.trimIndent()
+
+            val jsonRequest = GenerateContentRequest(
+                contents = listOf(
+                    Content(
+                        parts = listOf(
+                            Part(text = analysisPrompt),
+                            Part(inlineData = InlineData(mimeType = safeMime, data = audioBase64))
+                        )
+                    )
+                ),
+                generationConfig = GenerationConfig(
+                    temperature = 0.15f,
+                    responseMimeType = "application/json"
+                )
+            )
+            val plainRequest = GenerateContentRequest(
+                contents = jsonRequest.contents,
+                generationConfig = GenerationConfig(temperature = 0.15f)
+            )
+
+            // Valid, verified Gemini multimodal models with audio understanding
+            val analyzerModels = listOf(
+                "gemini-2.5-flash",
+                "gemini-2.5-flash-lite",
+                "gemini-2.5-pro",
+                "gemini-2.0-flash"
+            )
+            var lastError: Exception? = null
+            var rawText: String? = null
+
+            outer@ for (request in listOf(jsonRequest, plainRequest)) {
+                for (model in analyzerModels) {
+                    try {
+                        val resp = RetrofitClient.service.generateContent(model, apiKey, request)
+                        val text = resp.candidates?.firstOrNull()?.content?.parts?.firstOrNull { !it.text.isNullOrBlank() }?.text
+                        if (!text.isNullOrBlank()) {
+                            rawText = text
+                            break@outer
+                        }
+                    } catch (e: retrofit2.HttpException) {
+                        val errBody = try { e.response()?.errorBody()?.string() } catch (_: Exception) { null }
+                        val msg = parseErrorMessage(errBody) ?: e.message()
+                        if (isApiKeyAuthError(e.code(), msg, errBody)) {
+                            throw ApiKeyException("Invalid or unauthorized Gemini API key: $msg. Tap the API Key button to update it.")
+                        }
+                        lastError = Exception("Voice analysis failed ($model: HTTP ${e.code()}): $msg")
+                        continue
+                    } catch (e: Exception) {
+                        lastError = e
+                    }
+                }
+            }
+
+            if (rawText.isNullOrBlank()) {
+                throw lastError ?: Exception("Unable to analyze the voice sample. Please try a clearer recording or audio/video file.")
+            }
+
+            parseVoiceAnalysisJson(rawText, hintLanguage)
+        } finally {
+            try {
+                if (transcodedTemp != null && transcodedTemp.exists()) {
+                    transcodedTemp.delete()
+                }
+            } catch (_: Exception) {
+            }
+        }
     }
 
     /**
@@ -784,7 +828,12 @@ class VoiceRepository(
         }
     }
 
-    private fun normalizeMediaMimeType(mimeType: String, extension: String): String {
+    /**
+     * Maps file MIME types strictly to MIME types officially accepted by Gemini REST API inlineData.
+     * Note: Gemini API rejects "audio/mp4" with HTTP 400 — MP4/M4A containers must use "video/mp4"
+     * if they weren't already transcoded to "audio/wav".
+     */
+    private fun normalizeGeminiMimeType(mimeType: String, extension: String): String {
         val lower = mimeType.lowercase()
         val ext = extension.lowercase()
         return when {
@@ -794,15 +843,13 @@ class VoiceRepository(
             ext == "flac" || lower.contains("flac") -> "audio/flac"
             ext == "aac" || lower.contains("aac") -> "audio/aac"
             ext == "aiff" || ext == "aif" || lower.contains("aiff") -> "audio/aiff"
-            ext == "mp4" || ext == "m4v" || lower == "video/mp4" -> "video/mp4"
+            ext == "m4a" || ext == "mp4" || ext == "m4v" || lower.contains("mp4") || lower.contains("m4a") -> "video/mp4"
             ext == "mov" || lower.contains("quicktime") -> "video/quicktime"
-            ext == "mkv" || lower.contains("matroska") -> "video/x-matroska"
-            ext == "webm" && lower.startsWith("video/") -> "video/webm"
-            ext == "webm" || lower.contains("webm") -> "audio/webm"
+            ext == "webm" || lower.contains("webm") -> "video/webm"
             ext == "3gp" || ext == "3gpp" || lower.contains("3gp") -> "video/3gpp"
-            ext == "m4a" || lower.contains("mp4") || lower.contains("m4a") -> "audio/mp4"
-            lower.startsWith("audio/") || lower.startsWith("video/") -> lower
-            else -> "audio/mp4"
+            lower in setOf("audio/wav", "audio/mp3", "audio/aiff", "audio/aac", "audio/ogg", "audio/flac") -> lower
+            lower.startsWith("video/") -> lower
+            else -> "audio/wav"
         }
     }
 
@@ -836,22 +883,55 @@ class VoiceRepository(
      * anti-click fades, peak normalization) and wraps in an exact RIFF WAV header.
      */
     private fun ensureMasteredWavOrMp3(audioBytes: ByteArray, mimeType: String, eqProfile: String): ByteArray {
-        // Already RIFF WAV -> master the PCM payload after 44-byte header if standard 16-bit PCM
+        // Already RIFF WAV -> dynamically locate the "data" chunk (handles LIST/JUNK/fact chunks safely)
         if (audioBytes.size > 44 &&
             audioBytes[0] == 'R'.code.toByte() &&
             audioBytes[1] == 'I'.code.toByte() &&
             audioBytes[2] == 'F'.code.toByte() &&
             audioBytes[3] == 'F'.code.toByte()
         ) {
-            val audioFormat = (audioBytes[20].toInt() and 0xFF) or ((audioBytes[21].toInt() and 0xFF) shl 8)
-            val channels = ((audioBytes[22].toInt() and 0xFF) or ((audioBytes[23].toInt() and 0xFF) shl 8)).coerceIn(1, 2)
-            val sampleRate = ((audioBytes[24].toInt() and 0xFF) or
-                ((audioBytes[25].toInt() and 0xFF) shl 8) or
-                ((audioBytes[26].toInt() and 0xFF) shl 16) or
-                ((audioBytes[27].toInt() and 0xFF) shl 24)).coerceIn(8000, 96000)
-            val bitsPerSample = (audioBytes[34].toInt() and 0xFF) or ((audioBytes[35].toInt() and 0xFF) shl 8)
-            return if (audioFormat == 1 && bitsPerSample == 16) {
-                val pcm = audioBytes.copyOfRange(44, audioBytes.size)
+            var audioFormat = 1
+            var channels = 1
+            var sampleRate = 24000
+            var bitsPerSample = 16
+            var dataOffset = -1
+            var dataSize = 0
+
+            var offset = 12
+            while (offset + 8 <= audioBytes.size) {
+                val id = String(audioBytes, offset, 4, Charsets.US_ASCII)
+                val size = (audioBytes[offset + 4].toInt() and 0xFF) or
+                    ((audioBytes[offset + 5].toInt() and 0xFF) shl 8) or
+                    ((audioBytes[offset + 6].toInt() and 0xFF) shl 16) or
+                    ((audioBytes[offset + 7].toInt() and 0xFF) shl 24)
+                val bodyStart = offset + 8
+                if (id == "fmt " && bodyStart + 16 <= audioBytes.size) {
+                    audioFormat = (audioBytes[bodyStart].toInt() and 0xFF) or
+                        ((audioBytes[bodyStart + 1].toInt() and 0xFF) shl 8)
+                    channels = ((audioBytes[bodyStart + 2].toInt() and 0xFF) or
+                        ((audioBytes[bodyStart + 3].toInt() and 0xFF) shl 8)).coerceIn(1, 2)
+                    sampleRate = ((audioBytes[bodyStart + 4].toInt() and 0xFF) or
+                        ((audioBytes[bodyStart + 5].toInt() and 0xFF) shl 8) or
+                        ((audioBytes[bodyStart + 6].toInt() and 0xFF) shl 16) or
+                        ((audioBytes[bodyStart + 7].toInt() and 0xFF) shl 24)).coerceIn(8000, 96000)
+                    bitsPerSample = (audioBytes[bodyStart + 14].toInt() and 0xFF) or
+                        ((audioBytes[bodyStart + 15].toInt() and 0xFF) shl 8)
+                } else if (id == "data") {
+                    dataOffset = bodyStart
+                    dataSize = if (size > 0 && bodyStart + size <= audioBytes.size) {
+                        size
+                    } else {
+                        (audioBytes.size - bodyStart).coerceAtLeast(0)
+                    }
+                    break
+                }
+                if (size < 0) break
+                val padded = if (size % 2 == 1) size + 1 else size
+                offset = bodyStart + padded
+            }
+
+            return if (audioFormat == 1 && bitsPerSample == 16 && dataOffset > 0 && dataSize >= 128) {
+                val pcm = audioBytes.copyOfRange(dataOffset, dataOffset + dataSize)
                 val mastered = AudioMasteringEngine.masterPcm16(pcm, sampleRate, channels, eqProfile)
                 buildWavHeader(mastered.size, sampleRate, channels, 16) + mastered
             } else {

@@ -187,6 +187,7 @@ object AudioWaveformExtractor {
             var inputDone = false
             var outputDone = false
             var decodedFrames = 0
+            var postEosTimeouts = 0
             val maxDecodeIterations = 1200
 
             while (!outputDone && decodedFrames < maxDecodeIterations) {
@@ -215,6 +216,7 @@ object AudioWaveformExtractor {
 
                 val outIdx = codec.dequeueOutputBuffer(bufferInfo, 8_000)
                 if (outIdx >= 0) {
+                    postEosTimeouts = 0
                     val outBuf = codec.getOutputBuffer(outIdx)
                     if (outBuf != null && bufferInfo.size >= 2) {
                         val bucket = ((bufferInfo.presentationTimeUs.coerceAtLeast(0L) * barCount) / durationUs)
@@ -244,7 +246,10 @@ object AudioWaveformExtractor {
                         outputDone = true
                     }
                 } else if (outIdx == MediaCodec.INFO_TRY_AGAIN_LATER && inputDone) {
-                    break
+                    postEosTimeouts++
+                    if (postEosTimeouts >= 25) {
+                        break
+                    }
                 }
             }
 

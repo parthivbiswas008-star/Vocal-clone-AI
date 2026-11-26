@@ -2,6 +2,7 @@ package com.example
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -61,6 +62,10 @@ class MainActivity : ComponentActivity() {
                 accentPreset = appSettings.accentPreset
             ) {
                 var currentTab by remember { mutableStateOf(AppTab.TTS) }
+
+                BackHandler(enabled = currentTab != AppTab.TTS) {
+                    currentTab = AppTab.TTS
+                }
 
                 val showApiKeyDialog by viewModel.showApiKeyDialog.collectAsStateWithLifecycle()
                 val apiKeyDialogTab by viewModel.apiKeyDialogTab.collectAsStateWithLifecycle()

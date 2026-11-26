@@ -140,7 +140,7 @@ jobs:
       - name: Upload debug APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-apk
+          name: vocal clone ai
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
@@ -156,14 +156,8 @@ jobs:
             exit 1
           fi
 
-          REPO_NAME="${GITHUB_REPOSITORY#*/}"
-          SAFE_REPO_NAME="$(printf '%s' "$REPO_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g; s/-+/-/g; s/^[._-]+//; s/[._-]+$//')"
-          if [ -z "$SAFE_REPO_NAME" ]; then
-            SAFE_REPO_NAME="android-app"
-          fi
-
           ASSET_DIR="$(mktemp -d "${RUNNER_TEMP}/apk-release-asset.XXXXXX")"
-          ASSET_NAME="${SAFE_REPO_NAME}-debug-build-${GITHUB_RUN_NUMBER}.apk"
+          ASSET_NAME="vocal-clone-ai.apk"
           ASSET_PATH="${ASSET_DIR}/${ASSET_NAME}"
 
           cp -- "$SOURCE_APK" "$ASSET_PATH"
@@ -191,7 +185,7 @@ jobs:
           set -euo pipefail
 
           RELEASE_TAG="debug-apk-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
-          RELEASE_TITLE="Debug APK Build #${GITHUB_RUN_NUMBER}"
+          RELEASE_TITLE="Vocal Clone AI (Build #${GITHUB_RUN_NUMBER})"
 
           {
             echo "release_tag=$RELEASE_TAG"
@@ -199,18 +193,18 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
           if ! command -v gh >/dev/null 2>&1; then
-            echo "::warning::GitHub CLI (gh) is not available. Skipping GitHub Release creation; the Actions artifact 'app-debug-apk' remains available."
+            echo "::warning::GitHub CLI (gh) is not available. Skipping GitHub Release creation; the Actions artifact 'vocal clone ai' remains available."
             exit 1
           fi
           gh --version
 
           if [ -z "${ASSET_PATH:-}" ] || [ ! -f "$ASSET_PATH" ] || [ ! -s "$ASSET_PATH" ] || [[ "$ASSET_PATH" != *.apk ]]; then
-            echo "::warning::Prepared release APK asset is missing or invalid. Skipping GitHub Release creation; the Actions artifact 'app-debug-apk' remains available."
+            echo "::warning::Prepared release APK asset is missing or invalid. Skipping GitHub Release creation; the Actions artifact 'vocal clone ai' remains available."
             exit 1
           fi
 
           RELEASE_NOTES="$(cat <<EOF
-          Automatically generated debug APK built by GitHub Actions.
+          Automatically generated **Vocal Clone AI** debug APK built by GitHub Actions.
 
           - **Workflow Run Number:** ${GITHUB_RUN_NUMBER}
           - **Workflow Run Attempt:** ${GITHUB_RUN_ATTEMPT}
@@ -230,7 +224,7 @@ jobs:
             --title "$RELEASE_TITLE" \
             --notes "$RELEASE_NOTES" \
             --latest; then
-            echo "::warning::Failed to publish GitHub Release '${RELEASE_TAG}'. The APK build succeeded and the Actions artifact 'app-debug-apk' remains available."
+            echo "::warning::Failed to publish GitHub Release '${RELEASE_TAG}'. The APK build succeeded and the Actions artifact 'vocal clone ai' remains available."
             exit 1
           fi
 
@@ -277,10 +271,10 @@ jobs:
               echo ""
               echo "You can download the APK directly from the **Assets** section on the GitHub Release page above."
               echo ""
-              echo "The standard GitHub Actions artifact (\`app-debug-apk\`) is also available in this workflow run as a backup."
+              echo "The standard GitHub Actions artifact (\`vocal clone ai\`) is also available in this workflow run as a backup."
             } >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "::warning::GitHub Release publishing failed or could not be verified. The debug APK build succeeded and the GitHub Actions artifact 'app-debug-apk' remains available for download."
+            echo "::warning::GitHub Release publishing failed or could not be verified. The debug APK build succeeded and the GitHub Actions artifact 'vocal clone ai' remains available for download."
 
             {
               echo "### Debug APK Build Succeeded (GitHub Release Publishing Failed)"
@@ -288,6 +282,6 @@ jobs:
               echo "> **Warning:** Publishing the APK to GitHub Releases failed or could not be verified."
               echo ""
               echo "- **APK Build Status:** Succeeded"
-              echo "- **Actions Artifact Backup:** \`app-debug-apk\` is available for download from the **Artifacts** section of this workflow run."
+              echo "- **Actions Artifact Backup:** \`vocal clone ai\` is available for download from the **Artifacts** section of this workflow run."
             } >> "$GITHUB_STEP_SUMMARY"
           fi

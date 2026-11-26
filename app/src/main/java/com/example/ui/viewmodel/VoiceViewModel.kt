@@ -265,12 +265,17 @@ class VoiceViewModel(
     fun clearTempAudioCache() {
         viewModelScope.launch {
             audioPlayer.stop()
+            val activeSamplePath = _tempSampleFile.value?.absolutePath
             withContext(Dispatchers.IO) {
                 val cacheDir = getApplication<Application>().cacheDir
                 cacheDir.listFiles()?.forEach { file ->
-                    if (file.isFile && (file.name.startsWith("clone_audition_") ||
+                    if (file.isFile &&
+                        file.absolutePath != activeSamplePath &&
+                        (file.name.startsWith("clone_audition_") ||
                             file.name.startsWith("cartesia_clean_clip_") ||
+                            file.name.startsWith("gemini_clean_clip_") ||
                             file.name.startsWith("live_voice_sample_") ||
+                            file.name.startsWith("imported_voice_") ||
                             file.name.startsWith("uploaded_voice_"))
                     ) {
                         file.delete()

@@ -1056,8 +1056,13 @@ fun VoicesScreen(
                                 }
                             }
                         )
-                    } else if (tempSampleFile != null && !isRecording && hasCartesiaApiKey && appSettings.preferCartesiaCloning) {
-                        // Direct Cartesia 1:1 Audition Panel (works without requiring Gemini API key!)
+                    }
+
+                    if (!isAnalyzingVoice && voiceAnalysis == null && tempSampleFile != null && !isRecording && hasCartesiaApiKey && appSettings.preferCartesiaCloning) {
+                        if (analysisError != null) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                        }
+                        // Direct Cartesia 1:1 Audition Panel (works even without Gemini analysis!)
                         val auditionPath = auditionAudioFile?.absolutePath
                         val isAuditionActive = auditionPath != null && playingPath == auditionPath
                         val isPlayingAudition = isPlaying && isAuditionActive
